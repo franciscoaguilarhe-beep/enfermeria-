@@ -1,0 +1,11 @@
+.env
+storage/logs/*.log
+storage/sessions/*
+!storage/sessions/.gitkeep
+storage/backups/*
+!storage/backups/.gitkeep
+output/
+tmp/
+release/
+*.sql.gz
+*.dump

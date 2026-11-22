@@ -1,0 +1,9 @@
+{
+  "name": "srae/enfermeria",
+  "description": "Sistema de Registro de Atención de Enfermería",
+  "type": "project",
+  "require": {
+    "php": ">=8.0",
+    "tecnickcom/tcpdf": "6.6.2"
+  }
+}
