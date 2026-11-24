@@ -1081,6 +1081,16 @@ function save_prostate_questionnaire(PDO $pdo, array $user): array
     ];
 }
 
+function format_up_codes(array $claves): string
+{
+    $count = count($claves);
+    if ($count === 0) return '';
+    if ($count === 1) return (string)$claves[0];
+    if ($count === 2) return $claves[0] . ', ' . $claves[1];
+    $last = array_pop($claves);
+    return implode(', ', $claves) . ' y ' . $last;
+}
+
 function evaluate_mental_health_blocks(int $puntajeAnsiedad, int $puntajeDepresion, int $ataquePanico): array
 {
     $interpretaciones = [];
@@ -1106,7 +1116,7 @@ function evaluate_mental_health_blocks(int $puntajeAnsiedad, int $puntajeDepresi
     // Bloque 3 (Pregunta 5 - PHQ-TP): Respuesta == 1 (SI)
     $positivoPanico = ($ataquePanico === 1);
     if ($positivoPanico) {
-        $interpretaciones[] = 'PB TRASTORNO DE PANICO, MIEDO';
+        $interpretaciones[] = 'PB TRASTORNO DE PÁNICO, MIEDO';
         $clavesUp[] = 'UP308';
         $sitioEnvio = 'ENVIO MF';
     }
@@ -1115,8 +1125,8 @@ function evaluate_mental_health_blocks(int $puntajeAnsiedad, int $puntajeDepresi
         $valoracion = 'SIN RIESGO DETECTADO / NORMAL';
         $claveUpStr = '';
     } else {
-        $valoracion = implode(' / ', $interpretaciones);
-        $claveUpStr = implode(', ', $clavesUp);
+        $valoracion = implode(', ', $interpretaciones);
+        $claveUpStr = format_up_codes($clavesUp);
     }
 
     return [

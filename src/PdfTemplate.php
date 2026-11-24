@@ -1647,19 +1647,26 @@ final class PdfTemplate extends TCPDF
         }
         if ($isPosPanico) {
             $computedUps[] = 'UP308';
-            $computedInterps[] = 'PB TRASTORNO DE PANICO, MIEDO';
+            $computedInterps[] = 'PB TRASTORNO DE PÁNICO, MIEDO';
         }
 
-        $claveUpDisplay = trim((string)($a['clave_up'] ?? ''));
-        if ($claveUpDisplay === '') {
-            $claveUpDisplay = !empty($computedUps) ? implode(', ', $computedUps) : '—';
+        $upCount = count($computedUps);
+        if ($upCount === 0) {
+            $claveUpDisplay = '';
+        } elseif ($upCount === 1) {
+            $claveUpDisplay = $computedUps[0];
+        } elseif ($upCount === 2) {
+            $claveUpDisplay = $computedUps[0] . ', ' . $computedUps[1];
+        } else {
+            $lastUp = array_pop($computedUps);
+            $claveUpDisplay = implode(', ', $computedUps) . ' y ' . $lastUp;
         }
-        $sitioEnvioDisplay = trim((string)($a['sitio_envio'] ?? ''));
-        if ($sitioEnvioDisplay === '') {
-            $sitioEnvioDisplay = !empty($computedUps) ? 'ENVIO MF' : '—';
+        if ($claveUpDisplay === '' && !empty($a['clave_up'])) {
+            $claveUpDisplay = trim((string)$a['clave_up']);
         }
+        $sitioEnvioDisplay = $upCount > 0 ? 'ENVIO MF' : '—';
         $valoracionDisplay = !empty($computedInterps)
-            ? implode(' / ', $computedInterps)
+            ? implode(', ', $computedInterps)
             : 'SIN RIESGO DETECTADO / NORMAL';
 
         $infoY = $offsetY + 20.8;
@@ -1988,18 +1995,19 @@ final class PdfTemplate extends TCPDF
 
         // Barra inferior de síntesis diagnóstica
         $footH = 4.6;
-        $valColW = 137.9;
-        $upEnvColW = $totalW - $valColW; // 54.0
+        $valColW = 135.9;
+        $upEnvColW = $totalW - $valColW; // 56.0
         $this->SetFillColor(246, 250, 248);
         $this->SetDrawColor(19, 50, 43);
         $this->Rect($leftX, $ry, $valColW, $footH, 'DF');
         $this->Rect($leftX + $valColW, $ry, $upEnvColW, $footH, 'DF');
-        $this->SetFont('helvetica', 'B', 6.3);
+        $this->SetFont('helvetica', 'B', 6.2);
         $this->SetTextColor(19, 50, 43);
         $this->SetXY($leftX + 1.5, $ry + 0.7);
         $this->Cell($valColW - 3.0, 3.2, 'VALORACIÓN: ' . $valoracionDisplay, 0, 0, 'L');
-        $this->SetXY($leftX + $valColW + 1.5, $ry + 0.7);
-        $this->Cell($upEnvColW - 3.0, 3.2, 'UP: ' . $claveUpDisplay . '  |  ' . $sitioEnvioDisplay, 0, 0, 'C');
+        $this->SetXY($leftX + $valColW + 1.2, $ry + 0.7);
+        $upFootTxt = $claveUpDisplay !== '' ? $claveUpDisplay : '—';
+        $this->Cell($upEnvColW - 2.4, 3.2, 'UP: ' . $upFootTxt . ' | ' . $sitioEnvioDisplay, 0, 0, 'C');
 
         // Restaurar estado gráfico
         $this->SetTextColor(0, 0, 0);

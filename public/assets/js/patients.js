@@ -1766,6 +1766,13 @@
   // ==========================================================================
   const mhPhq4Options = [0, 1, 2, 3];
 
+  function formatUpCodes(claves) {
+    if (!claves.length) return '—';
+    if (claves.length === 1) return claves[0];
+    if (claves.length === 2) return `${claves[0]}, ${claves[1]}`;
+    return `${claves.slice(0, -1).join(', ')} y ${claves[claves.length - 1]}`;
+  }
+
   function evaluateMhBlocks(sumAnsiedad, sumDepresion, panicoVal) {
     const isPosAnsiedad = sumAnsiedad > 3;
     const isPosDepresion = sumDepresion >= 3;
@@ -1783,7 +1790,7 @@
       clavesUp.push('UP306');
     }
     if (isPosPanico) {
-      interpretaciones.push('PB TRASTORNO DE PANICO, MIEDO');
+      interpretaciones.push('PB TRASTORNO DE PÁNICO, MIEDO');
       clavesUp.push('UP308');
     }
 
@@ -1793,8 +1800,8 @@
       isPosDepresion,
       isPosPanico,
       hasPositive,
-      valoracion: hasPositive ? interpretaciones.join(' / ') : 'SIN RIESGO DETECTADO / NORMAL',
-      claveUp: hasPositive ? clavesUp.join(', ') : '—',
+      valoracion: hasPositive ? interpretaciones.join(', ') : 'SIN RIESGO DETECTADO / NORMAL',
+      claveUp: formatUpCodes(clavesUp),
       sitioEnvio: hasPositive ? 'ENVIO MF' : '—',
     };
   }
