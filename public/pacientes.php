@@ -13,7 +13,7 @@ $headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
 $headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
 $headerContextParts = array_filter([
     trim((string)($user['unidad_nombre'] ?? '')),
-    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['consultorio_nombre'] ?? $user['consultorio_clave'] ?? '')),
     trim((string)($user['turno_nombre'] ?? '')),
 ], static fn(string $v): bool => $v !== '');
 $headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
@@ -32,7 +32,10 @@ function tri_select_options(): string {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="<?= patients_e($csrf) ?>">
     <link rel="stylesheet" href="<?= patients_e(base_url('assets/css/patients.css?v=' . filemtime(__DIR__ . '/assets/css/patients.css'))) ?>">
-<link rel="icon" href="/enfermeria/public/favicon.ico"></head>
+<link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#13322B">
+    <link rel="apple-touch-icon" href="assets/images/icon-192.png">
+    <link rel="icon" href="/enfermeria/public/favicon.ico"></head>
 <body class="patients-page" data-patients-app data-api-url="<?= patients_e($apiUrl) ?>">
     <!-- Topbar Institucional -->
     <header class="patients-topbar">

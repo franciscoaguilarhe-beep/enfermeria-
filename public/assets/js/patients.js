@@ -202,7 +202,7 @@
       consultorios.forEach(c => {
         const opt = document.createElement('option');
         opt.value = String(c.consultorio_id);
-        opt.textContent = c.clave || c.nombre_descriptivo || `Consultorio ${c.consultorio_id}`;
+        opt.textContent = c.nombre_descriptivo || c.clave || `Consultorio ${c.consultorio_id}`;
         sel.appendChild(opt);
       });
       if (currentVal) sel.value = currentVal;
@@ -294,8 +294,8 @@
     tbody.innerHTML = rows.map(row => {
       const hasActivity = !row.patient_only && Boolean(row.fecha);
       const dateTime = !hasActivity ? '—' : escapeHtml(formatDateTime(row.fecha, row.hora));
-      const consTurnoParts = [row.consultorio_clave || '', row.turno_clave || ''].filter(Boolean);
-      const consultShift = consTurnoParts.length ? escapeHtml(consTurnoParts.join('-')) : '—';
+      const consTurnoParts = [row.consultorio_nombre || row.consultorio_clave || '', row.turno_clave || ''].filter(Boolean);
+      const consultShift = consTurnoParts.length ? escapeHtml(consTurnoParts.join(' - ')) : '—';
       const staffName = !hasActivity ? '—' : escapeHtml(row.enfermera_nombre || '—');
       return `<tr data-patient-ref="${row.paciente_public_id}" tabindex="0">
         <td class="col-date">${dateTime}</td>
@@ -480,7 +480,7 @@
       <div class="card-data-row two-col">
         <div class="card-data-item">
           <span class="card-data-label">CONSULTORIO:</span>
-          <span class="card-data-value">${escapeHtml(display(p.consultorio_clave || p.consultorio_nombre))}</span>
+          <span class="card-data-value">${escapeHtml(display(p.consultorio_nombre || p.consultorio_clave))}</span>
         </div>
         <div class="card-data-item">
           <span class="card-data-label">TURNO:</span>

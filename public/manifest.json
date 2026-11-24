@@ -1,0 +1,25 @@
+{
+  "name": "SRAE - Sistema de Registro de Atención de Enfermería",
+  "short_name": "SRAE IMSS",
+  "description": "Sistema de Registro de Atención de Enfermería, Vacunación y Tamizajes Clínicos IMSS",
+  "start_url": "./index.php",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F4F7F6",
+  "theme_color": "#13322B",
+  "icons": [
+    {
+      "src": "assets/images/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/images/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

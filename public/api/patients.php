@@ -16,6 +16,29 @@ function public_id(): string
     return bin2hex(random_bytes(16));
 }
 
+function db_has_table(PDO $pdo, string $table): bool
+{
+    static $cache = [];
+    if (array_key_exists($table, $cache)) return $cache[$table];
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $table)) return $cache[$table] = false;
+    $stmt = $pdo->prepare('SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1');
+    $stmt->execute([$table]);
+    return $cache[$table] = (bool)$stmt->fetchColumn();
+}
+
+function db_has_column(PDO $pdo, string $table, string $column): bool
+{
+    static $cache = [];
+    $key = $table . '.' . $column;
+    if (array_key_exists($key, $cache)) return $cache[$key];
+    if (!preg_match('/^[a-zA-Z0-9_]+$/', $column) || !db_has_table($pdo, $table)) {
+        return $cache[$key] = false;
+    }
+    $stmt = $pdo->prepare('SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1');
+    $stmt->execute([$table, $column]);
+    return $cache[$key] = (bool)$stmt->fetchColumn();
+}
+
 function patient_user(PDO $pdo): array
 {
     $session = Auth::requireUser();
@@ -106,15 +129,19 @@ function patient_scope(array $user, string $patientAlias = 'p', string $attentio
 function scoped_patient(PDO $pdo, array $user, string $ref): ?array
 {
     if (!preg_match('/^[a-f0-9]{32}$/i', $ref)) return null;
-    $stmt = $pdo->prepare(
-        "SELECT p.*, c.clave AS consultorio_clave, c.nombre_descriptivo AS consultorio_nombre,
-                t.clave AS turno_clave, t.nombre AS turno_nombre
-         FROM pacientes p
-         LEFT JOIN consultorios c ON c.consultorio_id = p.consultorio_id
-         LEFT JOIN turnos t ON t.turno_id = p.turno_id
-         WHERE p.public_id=?
-         LIMIT 1"
-    );
+    if (db_has_column($pdo, 'pacientes', 'consultorio_id') && db_has_column($pdo, 'pacientes', 'turno_id')) {
+        $stmt = $pdo->prepare(
+            "SELECT p.*, c.clave AS consultorio_clave, c.nombre_descriptivo AS consultorio_nombre,
+                    t.clave AS turno_clave, t.nombre AS turno_nombre
+             FROM pacientes p
+             LEFT JOIN consultorios c ON c.consultorio_id = p.consultorio_id
+             LEFT JOIN turnos t ON t.turno_id = p.turno_id
+             WHERE p.public_id=?
+             LIMIT 1"
+        );
+    } else {
+        $stmt = $pdo->prepare("SELECT p.* FROM pacientes p WHERE p.public_id=? LIMIT 1");
+    }
     $stmt->execute([$ref]);
     return $stmt->fetch() ?: null;
 }
@@ -1546,7 +1573,7 @@ try {
 
             // Solo agregar condición de fecha si los parámetros vienen presentes, no vacíos y con formato válido
             if ($dateStart !== '' && $dateEnd !== '') {
-                $where[] = 'DATE(ult.fecha_hora) BETWEEN ? AND ?';
+                $where[] = 'ult.max_ev IS NOT NULL AND LEFT(ult.max_ev, 10) BETWEEN ? AND ?';
                 $whereParams[] = $dateStart;
                 $whereParams[] = $dateEnd;
             }
@@ -1572,13 +1599,60 @@ try {
                 }
             }
 
+            $hasPatCons = db_has_column($pdo, 'pacientes', 'consultorio_id');
+            $hasPatTurno = db_has_column($pdo, 'pacientes', 'turno_id');
+            $hasProstataTbl = db_has_table($pdo, 'dc_prostata');
+            $hasSmTbl = db_has_table($pdo, 'dc_salud_mental');
+            $hasTamizajesTbl = db_has_table($pdo, 'atenciones_tamizajes');
+
+            // Construir UNION ALL solo con columnas numéricas/fecha (100% compatible con MariaDB/MySQL sin conflictos de collation ni ROW_NUMBER)
+            $eventBranches = [
+                'SELECT a.paciente_id, TIMESTAMP(a.fecha, a.hora) AS fecha_hora, a.consultorio_id, a.turno_id, a.enfermera_id AS usuario_id, a.atencion_id AS orden_desempate
+                 FROM atenciones a
+                 WHERE a.estado = "ACTIVA" AND (' . $scopeEv . ')'
+            ];
+
+            if ($hasProstataTbl) {
+                $pConsExpr = db_has_column($pdo, 'dc_prostata', 'consultorio_id') ? 'COALESCE(dcp.consultorio_id, u_p.consultorio_id)' : 'u_p.consultorio_id';
+                $pTurnoExpr = db_has_column($pdo, 'dc_prostata', 'turno_id') ? 'COALESCE(dcp.turno_id, 1)' : '1';
+                $eventBranches[] = "SELECT dcp.id_paciente AS paciente_id, TIMESTAMP(dcp.fecha, TIME(dcp.f_creacion)) AS fecha_hora, {$pConsExpr} AS consultorio_id, {$pTurnoExpr} AS turno_id, dcp.id_usuario AS usuario_id, dcp.id AS orden_desempate
+                 FROM dc_prostata dcp
+                 LEFT JOIN usuarios u_p ON u_p.usuario_id = dcp.id_usuario";
+            }
+
+            if ($hasSmTbl) {
+                $smConsExpr = db_has_column($pdo, 'dc_salud_mental', 'consultorio_id') ? 'COALESCE(dcsm.consultorio_id, u_sm.consultorio_id)' : 'u_sm.consultorio_id';
+                $smTurnoExpr = db_has_column($pdo, 'dc_salud_mental', 'turno_id') ? 'COALESCE(dcsm.turno_id, 1)' : '1';
+                $eventBranches[] = "SELECT dcsm.id_paciente AS paciente_id, TIMESTAMP(dcsm.fecha, TIME(dcsm.f_creacion)) AS fecha_hora, {$smConsExpr} AS consultorio_id, {$smTurnoExpr} AS turno_id, dcsm.id_usuario AS usuario_id, dcsm.id AS orden_desempate
+                 FROM dc_salud_mental dcsm
+                 LEFT JOIN usuarios u_sm ON u_sm.usuario_id = dcsm.id_usuario";
+            }
+
+            if ($hasTamizajesTbl) {
+                $eventBranches[] = 'SELECT tm.paciente_id, tm.fecha_hora, tm.consultorio_id, COALESCE(tm.turno_id, 1) AS turno_id, tm.usuario_id, tm.id AS orden_desempate
+                 FROM atenciones_tamizajes tm';
+            }
+
+            $unionSql = implode("\nUNION ALL\n", $eventBranches);
+            $patConsCol = $hasPatCons ? 'p.consultorio_id AS paciente_consultorio_id' : 'NULL AS paciente_consultorio_id';
+            $patTurnoCol = $hasPatTurno ? 'p.turno_id AS paciente_turno_id' : 'NULL AS paciente_turno_id';
+            $prostataCols = $hasProstataTbl
+                ? '(SELECT dcp.id FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_id,
+                   (SELECT dcp.puntaje_total FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_puntaje,
+                   (SELECT dcp.valoracion FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_valoracion,'
+                : 'NULL AS prostata_id, NULL AS prostata_puntaje, NULL AS prostata_valoracion,';
+            $smCols = $hasSmTbl
+                ? '(SELECT dcsm.id FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_id,
+                   (SELECT dcsm.puntaje_phq4 FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_puntaje,
+                   (SELECT dcsm.ataque_panico FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_panico,
+                   (SELECT dcsm.valoracion FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_valoracion'
+                : 'NULL AS salud_mental_id, NULL AS salud_mental_puntaje, NULL AS salud_mental_panico, NULL AS salud_mental_valoracion';
+
             $params = array_merge($scopeLastParams, $scopeEvParams, $whereParams);
 
             $sql = 'SELECT
                         (SELECT a_last.public_id FROM atenciones a_last WHERE a_last.paciente_id = p.paciente_id AND a_last.estado = "ACTIVA" AND (' . $scopeLast . ') ORDER BY a_last.fecha DESC, a_last.hora DESC, a_last.atencion_id DESC LIMIT 1) AS atencion_public_id,
-                        DATE(ult.fecha_hora) AS fecha,
-                        TIME(ult.fecha_hora) AS hora,
-                        ult.tipo_evento AS ultimo_tipo_evento,
+                        ult.max_ev,
                         p.paciente_id,
                         p.public_id AS paciente_public_id,
                         p.nss,
@@ -1590,58 +1664,78 @@ try {
                         p.apellido_materno,
                         p.nombres,
                         p.sexo,
-                        p.consultorio_id AS paciente_consultorio_id,
-                        p.turno_id AS paciente_turno_id,
-                        COALESCE(cp.clave, c.clave) AS consultorio_clave,
-                        COALESCE(tp.clave, t.clave) AS turno_clave,
-                        e.nombre AS enfermera_nombre,
-                        (SELECT dcp.id FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_id,
-                        (SELECT dcp.puntaje_total FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_puntaje,
-                        (SELECT dcp.valoracion FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_valoracion,
-                        (SELECT dcsm.id FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_id,
-                        (SELECT dcsm.puntaje_phq4 FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_puntaje,
-                        (SELECT dcsm.ataque_panico FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_panico,
-                        (SELECT dcsm.valoracion FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_valoracion
+                        ' . $patConsCol . ',
+                        ' . $patTurnoCol . ',
+                        ' . $prostataCols . '
+                        ' . $smCols . '
                     FROM pacientes p
                     LEFT JOIN (
                         SELECT
                             ev.paciente_id,
-                            ev.fecha_hora,
-                            ev.consultorio_id,
-                            ev.turno_id,
-                            ev.usuario_id,
-                            ev.tipo_evento,
-                            ROW_NUMBER() OVER (PARTITION BY ev.paciente_id ORDER BY ev.fecha_hora DESC, ev.orden_desempate DESC) AS rn
+                            MAX(CONCAT(DATE_FORMAT(ev.fecha_hora, "%Y-%m-%d %H:%i:%s"), "|", LPAD(ev.orden_desempate, 10, "0"), "|", COALESCE(ev.consultorio_id, 0), "|", COALESCE(ev.turno_id, 0), "|", COALESCE(ev.usuario_id, 0))) AS max_ev
                         FROM (
-                            SELECT a.paciente_id, TIMESTAMP(a.fecha, a.hora) AS fecha_hora, a.consultorio_id, a.turno_id, a.enfermera_id AS usuario_id, "ATENCION" AS tipo_evento, a.atencion_id AS orden_desempate
-                            FROM atenciones a
-                            WHERE a.estado = "ACTIVA" AND (' . $scopeEv . ')
-                            UNION ALL
-                            SELECT dcp.id_paciente AS paciente_id, TIMESTAMP(dcp.fecha, TIME(dcp.f_creacion)) AS fecha_hora, COALESCE(dcp.consultorio_id, u_p.consultorio_id) AS consultorio_id, COALESCE(dcp.turno_id, 1) AS turno_id, dcp.id_usuario AS usuario_id, "PROSTATA" AS tipo_evento, dcp.id AS orden_desempate
-                            FROM dc_prostata dcp
-                            LEFT JOIN usuarios u_p ON u_p.usuario_id = dcp.id_usuario
-                            UNION ALL
-                            SELECT dcsm.id_paciente AS paciente_id, TIMESTAMP(dcsm.fecha, TIME(dcsm.f_creacion)) AS fecha_hora, COALESCE(dcsm.consultorio_id, u_sm.consultorio_id) AS consultorio_id, COALESCE(dcsm.turno_id, 1) AS turno_id, dcsm.id_usuario AS usuario_id, "SALUD_MENTAL" AS tipo_evento, dcsm.id AS orden_desempate
-                            FROM dc_salud_mental dcsm
-                            LEFT JOIN usuarios u_sm ON u_sm.usuario_id = dcsm.id_usuario
-                            UNION ALL
-                            SELECT tm.paciente_id, tm.fecha_hora, tm.consultorio_id, COALESCE(tm.turno_id, 1) AS turno_id, tm.usuario_id, tm.tipo_tamizaje AS tipo_evento, tm.id AS orden_desempate
-                            FROM atenciones_tamizajes tm
+                            ' . $unionSql . '
                         ) ev
-                    ) ult ON ult.paciente_id = p.paciente_id AND ult.rn = 1
-                    LEFT JOIN consultorios cp ON cp.consultorio_id = p.consultorio_id
-                    LEFT JOIN turnos tp ON tp.turno_id = p.turno_id
-                    LEFT JOIN consultorios c ON c.consultorio_id = ult.consultorio_id
-                    LEFT JOIN turnos t ON t.turno_id = ult.turno_id
-                    LEFT JOIN usuarios e ON e.usuario_id = ult.usuario_id
+                        GROUP BY ev.paciente_id
+                    ) ult ON ult.paciente_id = p.paciente_id
                     WHERE ' . implode(' AND ', $where) . '
-                    ORDER BY COALESCE(ult.fecha_hora, p.created_at) DESC, p.paciente_id DESC
+                    ORDER BY COALESCE(LEFT(ult.max_ev, 19), DATE_FORMAT(p.created_at, "%Y-%m-%d %H:%i:%s")) DESC, p.paciente_id DESC
                     LIMIT 250';
 
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
-            $rows = array_map(static function (array $row): array {
-                $hasActivity = !empty($row['fecha']);
+
+            $consultoriosMap = [];
+            foreach ($pdo->query('SELECT consultorio_id, clave, nombre_descriptivo FROM consultorios')->fetchAll(PDO::FETCH_ASSOC) as $cRow) {
+                $consultoriosMap[(int)$cRow['consultorio_id']] = [
+                    'clave' => (string)$cRow['clave'],
+                    'nombre' => (string)$cRow['nombre_descriptivo'],
+                ];
+            }
+            $turnosMap = [];
+            foreach ($pdo->query('SELECT turno_id, clave, nombre FROM turnos')->fetchAll(PDO::FETCH_ASSOC) as $tRow) {
+                $turnosMap[(int)$tRow['turno_id']] = [
+                    'clave' => (string)$tRow['clave'],
+                    'nombre' => (string)$tRow['nombre'],
+                ];
+            }
+            $usuariosMap = [];
+            foreach ($pdo->query('SELECT usuario_id, nombre FROM usuarios')->fetchAll(PDO::FETCH_ASSOC) as $uRow) {
+                $usuariosMap[(int)$uRow['usuario_id']] = (string)$uRow['nombre'];
+            }
+
+            $rows = array_map(static function (array $row) use ($consultoriosMap, $turnosMap, $usuariosMap): array {
+                $fecha = null;
+                $hora = null;
+                $evConsId = 0;
+                $evTurnoId = 0;
+                $evUserId = 0;
+
+                if (!empty($row['max_ev'])) {
+                    $parts = explode('|', (string)$row['max_ev']);
+                    $dt = $parts[0] ?? '';
+                    if (strlen($dt) >= 19) {
+                        $fecha = substr($dt, 0, 10);
+                        $hora = substr($dt, 11, 8);
+                    }
+                    $evConsId = (int)($parts[2] ?? 0);
+                    $evTurnoId = (int)($parts[3] ?? 0);
+                    $evUserId = (int)($parts[4] ?? 0);
+                }
+                unset($row['max_ev']);
+
+                $finalConsId = !empty($row['paciente_consultorio_id']) ? (int)$row['paciente_consultorio_id'] : $evConsId;
+                $finalTurnoId = !empty($row['paciente_turno_id']) ? (int)$row['paciente_turno_id'] : $evTurnoId;
+
+                $row['fecha'] = $fecha;
+                $row['hora'] = $hora;
+                $row['consultorio_clave'] = $consultoriosMap[$finalConsId]['clave'] ?? null;
+                $row['consultorio_nombre'] = $consultoriosMap[$finalConsId]['nombre'] ?? null;
+                $row['turno_clave'] = $turnosMap[$finalTurnoId]['clave'] ?? null;
+                $row['turno_nombre'] = $turnosMap[$finalTurnoId]['nombre'] ?? null;
+                $row['enfermera_nombre'] = $usuariosMap[$evUserId] ?? null;
+
+                $hasActivity = !empty($fecha);
                 $row['patient_only'] = !$hasActivity;
                 $row['has_prostata'] = !empty($row['prostata_id']);
                 $row['has_salud_mental'] = !empty($row['salud_mental_id']);
@@ -1652,7 +1746,7 @@ try {
                 ], static fn($v): bool => trim((string)$v) !== '')));
                 $row['identidad'] = trim($row['nss'] . '-' . (string)$row['dv'] . ' ' . $row['agregado']);
                 return $row;
-            }, $stmt->fetchAll());
+            }, $stmt->fetchAll(PDO::FETCH_ASSOC));
 
             patient_json([
                 'ok' => true,
@@ -1680,16 +1774,27 @@ try {
             $stmtValT->execute([$data['turno_id']]);
             if (!$stmtValT->fetch()) $data['turno_id'] = null;
         }
+        $hasPatConsCols = db_has_column($pdo, 'pacientes', 'consultorio_id') && db_has_column($pdo, 'pacientes', 'turno_id');
         if ($existing) {
-            $stmt = $pdo->prepare('UPDATE pacientes SET dv=?,unidad_adscripcion_id=?,consultorio_id=?,turno_id=?,curp=?,escolaridad=?,ocupacion=?,estado_civil=?,apellido_paterno=?,apellido_materno=?,nombres=?,fecha_nacimiento=?,lugar_nacimiento=?,sexo=?,indigena=?,afromexicano=?,discapacidad=?,pais_residencia=?,entidad_residencia=?,municipio=?,colonia=?,calle=?,numero_exterior=?,numero_interior=?,codigo_postal=?,telefono=?,otro_contacto=?,domicilio=? WHERE paciente_id=?');
-            $stmt->execute([$data['dv'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio'], (int)$existing['paciente_id']]);
+            if ($hasPatConsCols) {
+                $stmt = $pdo->prepare('UPDATE pacientes SET dv=?,unidad_adscripcion_id=?,consultorio_id=?,turno_id=?,curp=?,escolaridad=?,ocupacion=?,estado_civil=?,apellido_paterno=?,apellido_materno=?,nombres=?,fecha_nacimiento=?,lugar_nacimiento=?,sexo=?,indigena=?,afromexicano=?,discapacidad=?,pais_residencia=?,entidad_residencia=?,municipio=?,colonia=?,calle=?,numero_exterior=?,numero_interior=?,codigo_postal=?,telefono=?,otro_contacto=?,domicilio=? WHERE paciente_id=?');
+                $stmt->execute([$data['dv'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio'], (int)$existing['paciente_id']]);
+            } else {
+                $stmt = $pdo->prepare('UPDATE pacientes SET dv=?,unidad_adscripcion_id=?,curp=?,escolaridad=?,ocupacion=?,estado_civil=?,apellido_paterno=?,apellido_materno=?,nombres=?,fecha_nacimiento=?,lugar_nacimiento=?,sexo=?,indigena=?,afromexicano=?,discapacidad=?,pais_residencia=?,entidad_residencia=?,municipio=?,colonia=?,calle=?,numero_exterior=?,numero_interior=?,codigo_postal=?,telefono=?,otro_contacto=?,domicilio=? WHERE paciente_id=?');
+                $stmt->execute([$data['dv'], $data['unidad_adscripcion_id'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio'], (int)$existing['paciente_id']]);
+            }
             $after = scoped_patient($pdo, $user, $ref);
             audit($pdo, $user, 'MODIFICACIÓN PACIENTE', 'pacientes', (int)$existing['paciente_id'], $existing, $after);
             $message = 'DATOS ACTUALIZADOS.';
         } else {
             $data['public_id'] = public_id();
-            $stmt = $pdo->prepare('INSERT INTO pacientes (public_id,nss,dv,agregado,curp,escolaridad,ocupacion,estado_civil,unidad_adscripcion_id,consultorio_id,turno_id,apellido_paterno,apellido_materno,nombres,fecha_nacimiento,lugar_nacimiento,sexo,indigena,afromexicano,discapacidad,pais_residencia,entidad_residencia,municipio,colonia,calle,numero_exterior,numero_interior,codigo_postal,telefono,otro_contacto,domicilio) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            $stmt->execute([$data['public_id'], $data['nss'], $data['dv'], $data['agregado'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio']]);
+            if ($hasPatConsCols) {
+                $stmt = $pdo->prepare('INSERT INTO pacientes (public_id,nss,dv,agregado,curp,escolaridad,ocupacion,estado_civil,unidad_adscripcion_id,consultorio_id,turno_id,apellido_paterno,apellido_materno,nombres,fecha_nacimiento,lugar_nacimiento,sexo,indigena,afromexicano,discapacidad,pais_residencia,entidad_residencia,municipio,colonia,calle,numero_exterior,numero_interior,codigo_postal,telefono,otro_contacto,domicilio) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+                $stmt->execute([$data['public_id'], $data['nss'], $data['dv'], $data['agregado'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio']]);
+            } else {
+                $stmt = $pdo->prepare('INSERT INTO pacientes (public_id,nss,dv,agregado,curp,escolaridad,ocupacion,estado_civil,unidad_adscripcion_id,apellido_paterno,apellido_materno,nombres,fecha_nacimiento,lugar_nacimiento,sexo,indigena,afromexicano,discapacidad,pais_residencia,entidad_residencia,municipio,colonia,calle,numero_exterior,numero_interior,codigo_postal,telefono,otro_contacto,domicilio) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+                $stmt->execute([$data['public_id'], $data['nss'], $data['dv'], $data['agregado'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['unidad_adscripcion_id'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio']]);
+            }
             $after = scoped_patient($pdo, $user, $data['public_id']);
             audit($pdo, $user, 'ALTA PACIENTE', 'pacientes', (int)$pdo->lastInsertId(), null, $after);
             $message = 'PACIENTE REGISTRADO CORRECTAMENTE.';

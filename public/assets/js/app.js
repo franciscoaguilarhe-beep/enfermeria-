@@ -303,10 +303,7 @@ document.addEventListener('DOMContentLoaded', () => {
         (data.consultorios || []).forEach(c => {
           const opt = document.createElement('option');
           opt.value = String(c.consultorio_id);
-          const label = c.nombre_descriptivo && c.nombre_descriptivo !== c.clave
-            ? `${c.clave} — ${c.nombre_descriptivo}`
-            : (c.clave || c.nombre_descriptivo || `Consultorio ${c.consultorio_id}`);
-          opt.textContent = label;
+          opt.textContent = c.nombre_descriptivo || c.clave || `Consultorio ${c.consultorio_id}`;
           if (Number(c.consultorio_id) === Number(u.consultorio_id)) opt.selected = true;
           selCons.appendChild(opt);
         });
@@ -355,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const u = data.user || {};
         const parts = [
           (u.unidad_nombre || '').trim(),
-          (u.consultorio_clave || u.consultorio_nombre || '').trim(),
+          (u.consultorio_nombre || u.consultorio_clave || '').trim(),
           (u.turno_nombre || '').trim()
         ].filter(Boolean);
         if (contextTrigger) {
@@ -375,3 +372,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// Registro de Service Worker (PWA) con manejo silencioso para intranet HTTP
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}

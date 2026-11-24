@@ -175,7 +175,7 @@ final class PdfTemplate extends TCPDF
         $this->SetFont('helvetica', 'B', 7);
         $this->Write(4, 'CONSULTORIO: ');
         $this->SetFont('helvetica', '', 7);
-        $consClave = (string)($a['consultorio_clave'] ?? $a['consultorio_nombre'] ?? '7');
+        $consClave = (string)($a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? '7');
         $turnoNombre = (string)($a['turno_nombre'] ?? $a['turno_clave'] ?? 'MATUTINO');
         $consultShift = trim($consClave . ' - ' . $turnoNombre);
         $this->Write(4, $consultShift);
@@ -650,17 +650,17 @@ final class PdfTemplate extends TCPDF
         $yBase += 4.7;
         $this->SetFont('helvetica', 'B', 8);
         $this->SetXY($boxX + 2, $yBase);
-        $this->Cell(18, 4, 'Estado civil', 0, 0, 'L');
+        $this->Cell(16, 4, 'Estado civil', 0, 0, 'L');
         $this->SetFont('helvetica', '', 8);
-        $this->Cell(18, 4, mb_strtoupper((string)($a['estado_civil'] ?? ''), 'UTF-8'), 0, 0, 'C');
+        $this->Cell(17, 4, mb_strtoupper((string)($a['estado_civil'] ?? ''), 'UTF-8'), 0, 0, 'C');
         $this->SetFont('helvetica', 'B', 8);
-        $this->Cell(18, 4, 'Consultorio', 0, 0, 'C');
-        $this->SetFont('helvetica', '', 8);
-        $this->Cell(12, 4, (string)($a['consultorio_clave'] ?? $a['consultorio_nombre'] ?? ''), 0, 0, 'C');
+        $this->Cell(17, 4, 'Consultorio', 0, 0, 'C');
+        $this->SetFont('helvetica', '', 7.6);
+        $this->Cell(20, 4, (string)($a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? ''), 0, 0, 'C');
         $this->SetFont('helvetica', 'B', 8);
-        $this->Cell(12, 4, 'Turno', 0, 0, 'C');
+        $this->Cell(10, 4, 'Turno', 0, 0, 'C');
         $this->SetFont('helvetica', '', 8);
-        $this->Cell(25, 4, mb_strtoupper((string)($a['turno_nombre'] ?? $a['turno_clave'] ?? ''), 'UTF-8'), 0, 1, 'R');
+        $this->Cell(23, 4, mb_strtoupper((string)($a['turno_nombre'] ?? $a['turno_clave'] ?? ''), 'UTF-8'), 0, 1, 'R');
         
         $startY = 44;
         $this->SetLineWidth(0.4);
@@ -1099,7 +1099,7 @@ final class PdfTemplate extends TCPDF
         $this->Cell(9.0, 5.0, 'UP:', 0, 0, 'L');
 
         $upValue = trim((string)($a['unidad_clave'] ?? $a['unidad_nombre'] ?? ''));
-        $consRef = trim((string)($a['consultorio_clave'] ?? $a['consultorio_nombre'] ?? ''));
+        $consRef = trim((string)($a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? ''));
         if ($consRef !== '') {
             $upValue = trim($upValue . ' / CONS. ' . $consRef, ' /');
         }
@@ -1583,7 +1583,7 @@ final class PdfTemplate extends TCPDF
         if ($edadDisplay !== '' && is_numeric($edadDisplay)) {
             $edadDisplay .= ' AÑOS';
         }
-        $consDisplay = trim((string)($a['consultorio_clave'] ?? $a['consultorio_nombre'] ?? $a['consultorio'] ?? ''));
+        $consDisplay = trim((string)($a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? $a['consultorio'] ?? ''));
         $telDisplay = trim((string)($a['telefono'] ?? ''));
 
         $prefijo = rtrim(mb_strtoupper(trim((string)($a['prefijo'] ?? $a['enfermera_prefijo'] ?? 'L.E.')), 'UTF-8'), ':');

@@ -19,7 +19,7 @@ $headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
 $headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
 $headerContextParts = array_filter([
     trim((string)($user['unidad_nombre'] ?? '')),
-    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['consultorio_nombre'] ?? $user['consultorio_clave'] ?? '')),
     trim((string)($user['turno_nombre'] ?? '')),
 ], static fn(string $v): bool => $v !== '');
 $headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
@@ -36,6 +36,9 @@ function reportes_e(?string $value): string {
     <meta name="csrf-token" content="<?= reportes_e($csrf) ?>">
     <link rel="stylesheet" href="<?= reportes_e(base_url('assets/css/patients.css?v=' . filemtime(__DIR__ . '/assets/css/patients.css'))) ?>">
     <script src="<?= reportes_e(base_url('assets/js/chart.umd.js')) ?>"></script>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#13322B">
+    <link rel="apple-touch-icon" href="assets/images/icon-192.png">
     <link rel="icon" href="/enfermeria/public/favicon.ico">
     <title>Reportes · SRAE</title>
 </head>

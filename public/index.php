@@ -15,17 +15,23 @@ function fetch_attention(PDO $pdo, string $ref): ?array
 function fetch_patient_with_assignment(PDO $pdo, string $byField, int|string $value): ?array
 {
     $allowed = $byField === 'paciente_id' ? 'p.paciente_id' : 'p.public_id';
-    $stmt = $pdo->prepare(
-        "SELECT p.*, cp.clave AS paciente_consultorio_clave, cp.nombre_descriptivo AS paciente_consultorio_nombre,
-                tp.clave AS paciente_turno_clave, tp.nombre AS paciente_turno_nombre
-         FROM pacientes p
-         LEFT JOIN consultorios cp ON cp.consultorio_id = p.consultorio_id
-         LEFT JOIN turnos tp ON tp.turno_id = p.turno_id
-         WHERE {$allowed} = ?
-         LIMIT 1"
-    );
-    $stmt->execute([$value]);
-    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    try {
+        $stmt = $pdo->prepare(
+            "SELECT p.*, cp.clave AS paciente_consultorio_clave, cp.nombre_descriptivo AS paciente_consultorio_nombre,
+                    tp.clave AS paciente_turno_clave, tp.nombre AS paciente_turno_nombre
+             FROM pacientes p
+             LEFT JOIN consultorios cp ON cp.consultorio_id = p.consultorio_id
+             LEFT JOIN turnos tp ON tp.turno_id = p.turno_id
+             WHERE {$allowed} = ?
+             LIMIT 1"
+        );
+        $stmt->execute([$value]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    } catch (Throwable $ignored) {
+        $stmt = $pdo->prepare("SELECT p.* FROM pacientes p WHERE {$allowed} = ? LIMIT 1");
+        $stmt->execute([$value]);
+        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+    }
 }
 
 $route = (string)($_GET["r"] ?? $_POST["r"] ?? "dashboard");
@@ -56,6 +62,7 @@ if ($route === "logout") {
 function render_minimal_header(string $title): void {
     $flashes = take_flash();
     echo "<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+    echo "<link rel=\"manifest\" href=\"manifest.json\"><meta name=\"theme-color\" content=\"#13322B\"><link rel=\"apple-touch-icon\" href=\"assets/images/icon-192.png\">";
     echo "<title>" . h($title) . " - SRAE</title><link rel=\"stylesheet\" href=\"" . h(base_url("assets/css/app.css")) . "\"><link rel=\"icon\" href=\"/enfermeria/public/favicon.ico\"></head><body>";
     
     $u = Auth::user();
@@ -276,14 +283,14 @@ if ($route === "pdf_colon") {
         // Preparar payload para el PDF
         $upParam = trim((string)($_GET["up"] ?? ""));
 
-        // Prioridad: 1) Consultorio y turno fijos del paciente; 2) Sesión activa de la enfermera; 3) Última atención del paciente
+        // Prioridad: 1) Consultorio y turno fijos del paciente (nombre_descriptivo); 2) Sesión activa de la enfermera; 3) Última atención del paciente
         $consParam = trim((string)(
-            $patient["paciente_consultorio_clave"]
-            ?? $patient["paciente_consultorio_nombre"]
-            ?? $user["consultorio_clave"]
+            $patient["paciente_consultorio_nombre"]
+            ?? $patient["paciente_consultorio_clave"]
             ?? $user["consultorio_nombre"]
-            ?? $lastAtt["consultorio_clave"]
+            ?? $user["consultorio_clave"]
             ?? $lastAtt["consultorio_nombre"]
+            ?? $lastAtt["consultorio_clave"]
             ?? ""
         ));
         $turnoParam = trim((string)(
@@ -301,19 +308,23 @@ if ($route === "pdf_colon") {
         }
 
         // Registrar evento independiente en atenciones_tamizajes para reflejar la última actividad clínica del paciente
-        $activeConsultorioId = !empty($user["consultorio_id"]) ? (int)$user["consultorio_id"] : (!empty($lastAtt["consultorio_id"]) ? (int)$lastAtt["consultorio_id"] : null);
-        $activeTurnoId = !empty($user["turno_id"]) ? (int)$user["turno_id"] : (!empty($lastAtt["turno_id"]) ? (int)$lastAtt["turno_id"] : 1);
-        $stmtTam = $pdoPdf->prepare(
-            "INSERT INTO atenciones_tamizajes (paciente_id, usuario_id, consultorio_id, turno_id, tipo_tamizaje, fecha_hora)
-             VALUES (?, ?, ?, ?, ?, NOW())"
-        );
-        $stmtTam->execute([
-            (int)$patient["paciente_id"],
-            (int)$user["usuario_id"],
-            $activeConsultorioId,
-            $activeTurnoId,
-            "COLON_Y_RECTO",
-        ]);
+        try {
+            $activeConsultorioId = !empty($user["consultorio_id"]) ? (int)$user["consultorio_id"] : (!empty($lastAtt["consultorio_id"]) ? (int)$lastAtt["consultorio_id"] : null);
+            $activeTurnoId = !empty($user["turno_id"]) ? (int)$user["turno_id"] : (!empty($lastAtt["turno_id"]) ? (int)$lastAtt["turno_id"] : 1);
+            $stmtTam = $pdoPdf->prepare(
+                "INSERT INTO atenciones_tamizajes (paciente_id, usuario_id, consultorio_id, turno_id, tipo_tamizaje, fecha_hora)
+                 VALUES (?, ?, ?, ?, ?, NOW())"
+            );
+            $stmtTam->execute([
+                (int)$patient["paciente_id"],
+                (int)$user["usuario_id"],
+                $activeConsultorioId,
+                $activeTurnoId,
+                "COLON_Y_RECTO",
+            ]);
+        } catch (Throwable $ignored) {
+            // Tolerante si la tabla atenciones_tamizajes aún no ha sido migrada
+        }
 
         $pdfData = [
             "paciente_nombre" => $nombreCompleto,

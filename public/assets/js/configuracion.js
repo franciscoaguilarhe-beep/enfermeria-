@@ -152,7 +152,7 @@
         const statusClass = u.activo ? 'active' : 'inactive';
         const statusLabel = u.activo ? 'ACTIVO' : 'INACTIVO';
         const unitSiglas = u.unidad_siglas || (u.unidad_nombre ? escapeHtml(u.unidad_nombre) : '—');
-        const consultLabel = u.consultorio_clave || u.consultorio_nombre || '—';
+        const consultLabel = u.consultorio_nombre || u.consultorio_clave || '—';
 
         const prefixDisplay = u.prefijo ? `${u.prefijo} ` : '';
 

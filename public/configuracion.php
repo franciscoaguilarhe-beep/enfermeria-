@@ -11,7 +11,7 @@ $headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
 $headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
 $headerContextParts = array_filter([
     trim((string)($user['unidad_nombre'] ?? '')),
-    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['consultorio_nombre'] ?? $user['consultorio_clave'] ?? '')),
     trim((string)($user['turno_nombre'] ?? '')),
 ], static fn(string $v): bool => $v !== '');
 $headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
@@ -29,7 +29,10 @@ function config_e(?string $value): string {
     <title>Configuración · SRAE</title>
     <link rel="stylesheet" href="<?= config_e(base_url('assets/css/patients.css')) ?>">
     <link rel="stylesheet" href="<?= config_e(base_url('assets/css/configuracion.css')) ?>">
-<link rel="icon" href="/enfermeria/public/favicon.ico"></head>
+<link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#13322B">
+    <link rel="apple-touch-icon" href="assets/images/icon-192.png">
+    <link rel="icon" href="/enfermeria/public/favicon.ico"></head>
 <body class="config-page" data-config-app data-api-url="<?= config_e($apiUrl) ?>">
     <!-- Topbar Institucional -->
     <header class="patients-topbar">
