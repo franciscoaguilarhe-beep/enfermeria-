@@ -2,13 +2,21 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config/bootstrap.php';
 
-$user = Auth::requireUser();
+$user = require_fresh_user();
 if ((bool)($user['debe_cambiar_password'] ?? false)) redirect(base_url('index.php?r=password_change'));
 $canConfig = Auth::can('ADMINISTRADOR');
 $canReports = Auth::can('ADMINISTRADOR', 'SUPERVISOR');
 $apiUrl = base_url('api/patients.php');
 $csrf = Security::csrfToken();
 $flashes = take_flash();
+$headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
+$headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
+$headerContextParts = array_filter([
+    trim((string)($user['unidad_nombre'] ?? '')),
+    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['turno_nombre'] ?? '')),
+], static fn(string $v): bool => $v !== '');
+$headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
 
 function patients_e(?string $value): string {
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -38,9 +46,9 @@ function tri_select_options(): string {
             <?php if ($canConfig): ?>
                 <a href="<?= patients_e(base_url('configuracion.php')) ?>">Configuración</a>
             <?php endif; ?>
-            <div class="nav-user">
-                <span class="nav-user-name"><?= patients_e((string)$user['nombre']) ?></span>
-                <span class="nav-user-unit"><?= patients_e(trim((string)($user['unidad_nombre'] ?? '') . ' · ' . (string)($user['consultorio_nombre'] ?? ''), ' ·') ?: 'ÁMBITO GENERAL') ?></span>
+            <div class="nav-user" data-profile-api-url="<?= patients_e(base_url('api/patients.php')) ?>">
+                <button type="button" class="nav-user-name nav-user-trigger" data-header-user-name title="Clic para editar mi prefijo y nombre"><?= patients_e($headerUserDisplay) ?></button>
+                <button type="button" class="nav-user-unit nav-user-trigger" data-header-user-context title="Clic para cambiar consultorio y turno"><?= patients_e($headerContextDisplay) ?></button>
             </div>
             <a class="nav-logout" href="<?= patients_e(base_url('index.php?r=logout')) ?>">Cerrar Sesión</a>
         </nav>
@@ -198,6 +206,18 @@ function tri_select_options(): string {
                     <div class="field-item">
                         <label>DISCAPACIDAD:</label>
                         <select name="discapacidad"><?= tri_select_options() ?></select>
+                    </div>
+                    <div class="field-item">
+                        <label>CONSULTORIO:</label>
+                        <select name="consultorio_id" data-patient-consultorio-select>
+                            <option value="">SIN ASIGNAR</option>
+                        </select>
+                    </div>
+                    <div class="field-item">
+                        <label>TURNO:</label>
+                        <select name="turno_id" data-patient-turno-select>
+                            <option value="">SIN ASIGNAR</option>
+                        </select>
                     </div>
                 </div>
 
@@ -361,6 +381,18 @@ function tri_select_options(): string {
                     <div class="field-item">
                         <label>DISCAPACIDAD:</label>
                         <select name="discapacidad"><?= tri_select_options() ?></select>
+                    </div>
+                    <div class="field-item">
+                        <label>CONSULTORIO:</label>
+                        <select name="consultorio_id" data-patient-consultorio-select>
+                            <option value="">SIN ASIGNAR</option>
+                        </select>
+                    </div>
+                    <div class="field-item">
+                        <label>TURNO:</label>
+                        <select name="turno_id" data-patient-turno-select>
+                            <option value="">SIN ASIGNAR</option>
+                        </select>
                     </div>
                 </div>
 
@@ -1127,7 +1159,7 @@ function tri_select_options(): string {
         <option value="CONCUBINATO">
     </datalist>
 
-    <script src="<?= patients_e(base_url('assets/js/app.js')) ?>"></script>
+    <script src="<?= patients_e(base_url('assets/js/app.js?v=' . filemtime(__DIR__ . '/assets/js/app.js'))) ?>"></script>
     <script src="<?= patients_e(base_url('assets/js/patients.js?v=' . filemtime(__DIR__ . '/assets/js/patients.js'))) ?>"></script>
 </body>
 </html>

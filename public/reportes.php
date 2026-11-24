@@ -15,6 +15,14 @@ if (!$canReports && !Auth::can('ENFERMERIA')) { // assuming any valid role can a
 $apiUrl = base_url('api/reports.php');
 $csrf = Security::csrfToken();
 $flashes = take_flash();
+$headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
+$headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
+$headerContextParts = array_filter([
+    trim((string)($user['unidad_nombre'] ?? '')),
+    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['turno_nombre'] ?? '')),
+], static fn(string $v): bool => $v !== '');
+$headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
 
 function reportes_e(?string $value): string {
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -43,9 +51,9 @@ function reportes_e(?string $value): string {
             <?php if ($canConfig): ?>
                 <a href="<?= reportes_e(base_url('configuracion.php')) ?>">Configuración</a>
             <?php endif; ?>
-            <div class="nav-user">
-                <span class="nav-user-name"><?= reportes_e((string)$user['nombre']) ?></span>
-                <span class="nav-user-unit"><?= reportes_e(trim((string)($user['unidad_nombre'] ?? '') . ' · ' . (string)($user['consultorio_nombre'] ?? ''), ' ·') ?: 'ÁMBITO GENERAL') ?></span>
+            <div class="nav-user" data-profile-api-url="<?= reportes_e(base_url('api/patients.php')) ?>">
+                <button type="button" class="nav-user-name nav-user-trigger" data-header-user-name title="Clic para editar mi prefijo y nombre"><?= reportes_e($headerUserDisplay) ?></button>
+                <button type="button" class="nav-user-unit nav-user-trigger" data-header-user-context title="Clic para cambiar consultorio y turno"><?= reportes_e($headerContextDisplay) ?></button>
             </div>
             <a class="nav-logout" href="<?= reportes_e(base_url('index.php?r=logout')) ?>">Cerrar Sesión</a>
         </nav>
@@ -169,6 +177,8 @@ function reportes_e(?string $value): string {
             </div>
         </section>
     </main>
+    <div class="toast-region" aria-live="polite" data-toast-region></div>
+    <script src="<?= reportes_e(base_url('assets/js/app.js?v=' . filemtime(__DIR__ . '/assets/js/app.js'))) ?>"></script>
     <script src="<?= reportes_e(base_url('assets/js/reports.js?v=' . time())) ?>"></script>
 </body>
 </html>

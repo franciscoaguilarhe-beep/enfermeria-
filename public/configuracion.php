@@ -2,11 +2,19 @@
 declare(strict_types=1);
 require_once dirname(__DIR__) . '/config/bootstrap.php';
 
-$user = Auth::requireRole('ADMINISTRADOR');
+$user = require_role('ADMINISTRADOR');
 if ((bool)($user['debe_cambiar_password'] ?? false)) redirect(base_url('index.php?r=password_change'));
 $apiUrl = base_url('api/config.php');
 $csrf = Security::csrfToken();
 $flashes = take_flash();
+$headerPrefijo = trim((string)($user['prefijo'] ?? 'L.E.'));
+$headerUserDisplay = trim(($headerPrefijo !== '' ? $headerPrefijo . ' ' : '') . trim((string)($user['nombre'] ?? '')));
+$headerContextParts = array_filter([
+    trim((string)($user['unidad_nombre'] ?? '')),
+    trim((string)($user['consultorio_clave'] ?? $user['consultorio_nombre'] ?? '')),
+    trim((string)($user['turno_nombre'] ?? '')),
+], static fn(string $v): bool => $v !== '');
+$headerContextDisplay = $headerContextParts ? implode(' · ', $headerContextParts) : 'ÁMBITO GENERAL';
 
 function config_e(?string $value): string {
     return htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -33,9 +41,9 @@ function config_e(?string $value): string {
             <a href="<?= config_e(base_url('pacientes.php')) ?>">Pacientes</a>
             <a href="<?= config_e(base_url('index.php?r=reports')) ?>">Reportes</a>
             <a class="active" href="<?= config_e(base_url('configuracion.php')) ?>"><strong>Configuración</strong></a>
-            <div class="nav-user">
-                <span class="nav-user-name"><?= config_e((string)$user['nombre']) ?></span>
-                <span class="nav-user-unit"><?= config_e(trim((string)($user['unidad_nombre'] ?? '') . ' · ' . (string)($user['consultorio_nombre'] ?? ''), ' ·') ?: 'ÁMBITO GENERAL') ?></span>
+            <div class="nav-user" data-profile-api-url="<?= config_e(base_url('api/patients.php')) ?>">
+                <button type="button" class="nav-user-name nav-user-trigger" data-header-user-name title="Clic para editar mi prefijo y nombre"><?= config_e($headerUserDisplay) ?></button>
+                <button type="button" class="nav-user-unit nav-user-trigger" data-header-user-context title="Clic para cambiar consultorio y turno"><?= config_e($headerContextDisplay) ?></button>
             </div>
             <a class="nav-logout" href="<?= config_e(base_url('index.php?r=logout')) ?>">Cerrar Sesión</a>
         </nav>
@@ -364,6 +372,7 @@ function config_e(?string $value): string {
         </div>
     </div>
 
-    <script src="<?= config_e(base_url('assets/js/configuracion.js')) ?>"></script>
+    <script src="<?= config_e(base_url('assets/js/app.js?v=' . filemtime(__DIR__ . '/assets/js/app.js'))) ?>"></script>
+    <script src="<?= config_e(base_url('assets/js/configuracion.js?v=' . filemtime(__DIR__ . '/assets/js/configuracion.js'))) ?>"></script>
 </body>
 </html>

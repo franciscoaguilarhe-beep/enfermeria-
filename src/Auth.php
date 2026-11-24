@@ -19,6 +19,51 @@ final class Auth
         return $user;
     }
 
+    public static function resolveDefaultTurno(PDO $pdo): array
+    {
+        $nowTime = (new DateTimeImmutable('now'))->format('H:i:s');
+        $rows = $pdo->query('SELECT turno_id, clave, nombre, hora_inicio, hora_fin FROM turnos WHERE activo = 1 ORDER BY turno_id ASC')->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            if (!empty($row['hora_inicio']) && !empty($row['hora_fin'])) {
+                if ($nowTime >= (string)$row['hora_inicio'] && $nowTime < (string)$row['hora_fin']) {
+                    return [
+                        'turno_id' => (int)$row['turno_id'],
+                        'turno_clave' => (string)$row['clave'],
+                        'turno_nombre' => (string)$row['nombre'],
+                    ];
+                }
+            }
+        }
+        foreach ($rows as $row) {
+            if ((int)$row['turno_id'] === 1) {
+                return [
+                    'turno_id' => 1,
+                    'turno_clave' => (string)$row['clave'],
+                    'turno_nombre' => (string)$row['nombre'],
+                ];
+            }
+        }
+        if ($rows) {
+            return [
+                'turno_id' => (int)$rows[0]['turno_id'],
+                'turno_clave' => (string)$rows[0]['clave'],
+                'turno_nombre' => (string)$rows[0]['nombre'],
+            ];
+        }
+        return ['turno_id' => 1, 'turno_clave' => 'MAT', 'turno_nombre' => 'Matutino'];
+    }
+
+    public static function updateSession(array $updates): array
+    {
+        $current = self::user() ?? [];
+        $merged = array_merge($current, $updates);
+        if (!isset($merged['prefijo']) || trim((string)$merged['prefijo']) === '') {
+            $merged['prefijo'] = 'L.E.';
+        }
+        $_SESSION[self::SESSION_KEY] = $merged;
+        return $merged;
+    }
+
     public static function login(PDO $pdo, string $matricula, string $password): array
     {
         $stmt = $pdo->prepare('SELECT u.*, COALESCE(NULLIF(TRIM(u.prefijo), \'\'), \'L.E.\') AS prefijo, r.clave rol_clave, r.nombre rol_nombre, un.clave unidad_clave, un.nombre unidad_nombre, c.clave consultorio_clave, c.nombre_descriptivo consultorio_nombre FROM usuarios u LEFT JOIN roles r ON r.rol_id=u.rol_id LEFT JOIN unidades un ON un.unidad_id=u.unidad_id LEFT JOIN consultorios c ON c.consultorio_id=u.consultorio_id WHERE u.matricula=? LIMIT 1');
@@ -36,6 +81,10 @@ final class Auth
         $pdo->prepare('UPDATE usuarios SET intentos_fallidos=0, bloqueado_hasta=NULL, ultimo_acceso=NOW() WHERE usuario_id=?')->execute([(int)$user['usuario_id']]);
         unset($user['password_hash']);
         $user['prefijo'] = trim((string)($user['prefijo'] ?? 'L.E.')) ?: 'L.E.';
+        $defaultTurno = self::resolveDefaultTurno($pdo);
+        $user['turno_id'] = $defaultTurno['turno_id'];
+        $user['turno_clave'] = $defaultTurno['turno_clave'];
+        $user['turno_nombre'] = $defaultTurno['turno_nombre'];
         $_SESSION[self::SESSION_KEY] = $user;
         return $user;
     }

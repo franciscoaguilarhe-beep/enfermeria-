@@ -1363,8 +1363,8 @@ final class PdfTemplate extends TCPDF
         $nss = trim((string)($a['nss'] ?? ''));
         $agregado = trim((string)($a['agregado'] ?? ''));
         $nssDisplay = $agregado !== '' ? ($nss . ' ' . $agregado) : $nss;
-        $cons = trim((string)($a['consultorio'] ?? $a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? ''));
-        $turno = trim((string)($a['turno'] ?? $a['turno_nombre'] ?? $a['turno_clave'] ?? ''));
+        $cons = mb_strtoupper(trim((string)($a['consultorio'] ?? $a['consultorio_nombre'] ?? $a['consultorio_clave'] ?? '')), 'UTF-8');
+        $turno = mb_strtoupper(trim((string)($a['turno'] ?? $a['turno_nombre'] ?? $a['turno_clave'] ?? '')), 'UTF-8');
         $edad = trim((string)($a['edad'] ?? $a['edad_anios'] ?? ''));
         if ($edad !== '' && is_numeric($edad)) {
             $edad .= ' AÑOS';
@@ -1396,8 +1396,8 @@ final class PdfTemplate extends TCPDF
         $this->Cell(24.0, 5.0, $edad, 0, 0, 'C');
         $this->SetXY(100.2, 73.2);
         $this->Cell(24.0, 5.0, $cons, 0, 0, 'C');
-        $this->SetXY(144.0, 73.2);
-        $this->Cell(28.0, 5.0, $turno, 0, 0, 'C');
+        $this->SetXY(141.0, 73.2);
+        $this->Cell(34.0, 5.0, $turno, 0, 0, 'C');
 
         // 4. Fecha, UP
         $this->SetXY(41.0, 78.9);

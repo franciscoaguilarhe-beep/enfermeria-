@@ -191,9 +191,40 @@
     });
   }
 
+  function populatePatientAssignmentSelects(ctx) {
+    if (!ctx) return;
+    const consultorios = ctx.all_consultorios || ctx.consultorios || [];
+    const turnos = ctx.all_turnos || ctx.turnos || [];
+
+    $$('[data-patient-consultorio-select]').forEach(sel => {
+      const currentVal = sel.value;
+      sel.innerHTML = '<option value="">SIN ASIGNAR</option>';
+      consultorios.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = String(c.consultorio_id);
+        opt.textContent = c.clave || c.nombre_descriptivo || `Consultorio ${c.consultorio_id}`;
+        sel.appendChild(opt);
+      });
+      if (currentVal) sel.value = currentVal;
+    });
+
+    $$('[data-patient-turno-select]').forEach(sel => {
+      const currentVal = sel.value;
+      sel.innerHTML = '<option value="">SIN ASIGNAR</option>';
+      turnos.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = String(t.turno_id);
+        opt.textContent = t.nombre || t.clave || `Turno ${t.turno_id}`;
+        sel.appendChild(opt);
+      });
+      if (currentVal) sel.value = currentVal;
+    });
+  }
+
   async function loadContext() {
     if (state.context) return state.context;
     state.context = (await get({ action: 'context' })).context;
+    populatePatientAssignmentSelects(state.context);
     return state.context;
   }
 
@@ -261,10 +292,11 @@
     }
 
     tbody.innerHTML = rows.map(row => {
-      const isPatientOnly = Boolean(row.patient_only || !row.atencion_public_id);
-      const dateTime = isPatientOnly ? '—' : escapeHtml(formatDateTime(row.fecha, row.hora));
-      const consultShift = isPatientOnly ? '—' : `${escapeHtml(row.consultorio_clave || '')}-${escapeHtml(row.turno_clave || '')}`;
-      const staffName = isPatientOnly ? '—' : escapeHtml(row.enfermera_nombre || '');
+      const hasActivity = !row.patient_only && Boolean(row.fecha);
+      const dateTime = !hasActivity ? '—' : escapeHtml(formatDateTime(row.fecha, row.hora));
+      const consTurnoParts = [row.consultorio_clave || '', row.turno_clave || ''].filter(Boolean);
+      const consultShift = consTurnoParts.length ? escapeHtml(consTurnoParts.join('-')) : '—';
+      const staffName = !hasActivity ? '—' : escapeHtml(row.enfermera_nombre || '—');
       return `<tr data-patient-ref="${row.paciente_public_id}" tabindex="0">
         <td class="col-date">${dateTime}</td>
         <td class="col-patient">${escapeHtml(row.nombre_completo)}</td>
@@ -445,6 +477,16 @@
           <span class="card-data-value">${escapeHtml(tri(p.discapacidad))}</span>
         </div>
       </div>
+      <div class="card-data-row two-col">
+        <div class="card-data-item">
+          <span class="card-data-label">CONSULTORIO:</span>
+          <span class="card-data-value">${escapeHtml(display(p.consultorio_clave || p.consultorio_nombre))}</span>
+        </div>
+        <div class="card-data-item">
+          <span class="card-data-label">TURNO:</span>
+          <span class="card-data-value">${escapeHtml(display(p.turno_nombre || p.turno_clave))}</span>
+        </div>
+      </div>
 
       <div class="modal-section-title">LUGAR DE RESIDENCIA</div>
       <div class="card-data-row">
@@ -498,6 +540,7 @@
       if (title) title.textContent = 'EDITAR DATOS DEL PACIENTE';
       if (viewContainer) viewContainer.hidden = true;
       if (editForm) {
+        populatePatientAssignmentSelects(state.context);
         editForm.hidden = false;
         fill(editForm, state.cardPatient);
         editForm.elements.namedItem('public_id').value = state.cardPatient.public_id;
@@ -1715,6 +1758,7 @@
 
     window.open(url.toString(), '_blank', 'noopener');
     closeModal(modalElement('colon'));
+    setTimeout(() => { loadRows(); }, 650);
   }
 
   // ==========================================================================
@@ -2363,6 +2407,11 @@
   });
 
   $$('[data-print]').forEach(btn => btn.addEventListener('click', () => printDocument(btn.dataset.print)));
+
+  window.addEventListener('srae:context-updated', () => {
+    state.context = null;
+    loadContext().catch(() => {});
+  });
 
   // Carga inicial
   loadContext().then(loadRows).catch(error => {

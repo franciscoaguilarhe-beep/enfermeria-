@@ -19,13 +19,26 @@ function public_id(): string
 function patient_user(PDO $pdo): array
 {
     $session = Auth::requireUser();
-    $stmt = $pdo->prepare('SELECT u.*, r.clave rol_clave, r.nombre rol_nombre, un.clave unidad_clave, un.nombre unidad_nombre, c.clave consultorio_clave, c.nombre_descriptivo consultorio_nombre FROM usuarios u LEFT JOIN roles r ON r.rol_id=u.rol_id LEFT JOIN unidades un ON un.unidad_id=u.unidad_id LEFT JOIN consultorios c ON c.consultorio_id=u.consultorio_id WHERE u.usuario_id=? LIMIT 1');
+    $stmt = $pdo->prepare('SELECT u.*, COALESCE(NULLIF(TRIM(u.prefijo), \'\'), \'L.E.\') AS prefijo, r.clave rol_clave, r.nombre rol_nombre, un.clave unidad_clave, un.nombre unidad_nombre, c.clave consultorio_clave, c.nombre_descriptivo consultorio_nombre FROM usuarios u LEFT JOIN roles r ON r.rol_id=u.rol_id LEFT JOIN unidades un ON un.unidad_id=u.unidad_id LEFT JOIN consultorios c ON c.consultorio_id=u.consultorio_id WHERE u.usuario_id=? LIMIT 1');
     $stmt->execute([(int)$session['usuario_id']]);
     $user = $stmt->fetch();
     if (!$user || !(bool)$user['activo']) {
         Auth::logout();
         patient_json(['ok' => false, 'message' => 'La sesión ya no está activa.'], 401);
     }
+    unset($user['password_hash']);
+    $user['prefijo'] = trim((string)($user['prefijo'] ?? 'L.E.')) ?: 'L.E.';
+    if (!empty($session['turno_id']) && !empty($session['turno_nombre'])) {
+        $user['turno_id'] = (int)$session['turno_id'];
+        $user['turno_clave'] = (string)($session['turno_clave'] ?? '');
+        $user['turno_nombre'] = (string)$session['turno_nombre'];
+    } else {
+        $defaultTurno = Auth::resolveDefaultTurno($pdo);
+        $user['turno_id'] = $defaultTurno['turno_id'];
+        $user['turno_clave'] = $defaultTurno['turno_clave'];
+        $user['turno_nombre'] = $defaultTurno['turno_nombre'];
+    }
+    $_SESSION['srae_user'] = $user;
     return $user;
 }
 
@@ -93,7 +106,15 @@ function patient_scope(array $user, string $patientAlias = 'p', string $attentio
 function scoped_patient(PDO $pdo, array $user, string $ref): ?array
 {
     if (!preg_match('/^[a-f0-9]{32}$/i', $ref)) return null;
-    $stmt = $pdo->prepare("SELECT p.* FROM pacientes p WHERE p.public_id=? LIMIT 1");
+    $stmt = $pdo->prepare(
+        "SELECT p.*, c.clave AS consultorio_clave, c.nombre_descriptivo AS consultorio_nombre,
+                t.clave AS turno_clave, t.nombre AS turno_nombre
+         FROM pacientes p
+         LEFT JOIN consultorios c ON c.consultorio_id = p.consultorio_id
+         LEFT JOIN turnos t ON t.turno_id = p.turno_id
+         WHERE p.public_id=?
+         LIMIT 1"
+    );
     $stmt->execute([$ref]);
     return $stmt->fetch() ?: null;
 }
@@ -110,6 +131,12 @@ function present_patient(array $patient): array
     $patient['escolaridad'] = $patient['escolaridad'] ?? null;
     $patient['ocupacion'] = $patient['ocupacion'] ?? null;
     $patient['estado_civil'] = $patient['estado_civil'] ?? null;
+    $patient['consultorio_id'] = isset($patient['consultorio_id']) && $patient['consultorio_id'] !== null && $patient['consultorio_id'] !== '' ? (int)$patient['consultorio_id'] : null;
+    $patient['turno_id'] = isset($patient['turno_id']) && $patient['turno_id'] !== null && $patient['turno_id'] !== '' ? (int)$patient['turno_id'] : null;
+    $patient['consultorio_clave'] = $patient['consultorio_clave'] ?? null;
+    $patient['consultorio_nombre'] = $patient['consultorio_nombre'] ?? null;
+    $patient['turno_clave'] = $patient['turno_clave'] ?? null;
+    $patient['turno_nombre'] = $patient['turno_nombre'] ?? null;
     return $patient;
 }
 
@@ -144,6 +171,8 @@ function patient_payload(): array
         'escolaridad' => $escolaridad,
         'ocupacion' => $ocupacion,
         'estado_civil' => $estadoCivil,
+        'consultorio_id' => patient_int('consultorio_id'),
+        'turno_id' => patient_int('turno_id'),
         'apellido_paterno' => $value('apellido_paterno'),
         'apellido_materno' => $value('apellido_materno'),
         'nombres' => $names,
@@ -187,13 +216,15 @@ function context_data(PDO $pdo, array $user): array
         $stmt = $pdo->prepare('SELECT unidad_id,consultorio_id,turno_id FROM unidad_consultorio_turno WHERE unidad_id=? AND consultorio_id=? AND activo=1');
         $stmt->execute([(int)($user['unidad_id'] ?? 0), (int)($user['consultorio_id'] ?? 0)]); $matrix = $stmt->fetchAll();
     }
-    return ['broad' => $isBroad, 'user' => ['nombre' => $user['nombre'], 'matricula' => $user['matricula'], 'unidad_id' => $user['unidad_id'], 'consultorio_id' => $user['consultorio_id']], 'unidades' => $units, 'consultorios' => $clinics, 'turnos' => $shifts, 'matriz' => $matrix];
+    $allConsultorios = $pdo->query('SELECT consultorio_id, clave, nombre_descriptivo FROM consultorios WHERE activo = 1 ORDER BY consultorio_id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    $allTurnos = $pdo->query('SELECT turno_id, clave, nombre FROM turnos WHERE activo = 1 ORDER BY turno_id ASC')->fetchAll(PDO::FETCH_ASSOC);
+    return ['broad' => $isBroad, 'user' => ['nombre' => $user['nombre'], 'matricula' => $user['matricula'], 'unidad_id' => $user['unidad_id'], 'consultorio_id' => $user['consultorio_id'], 'turno_id' => $user['turno_id'] ?? 1], 'unidades' => $units, 'consultorios' => $clinics, 'turnos' => $shifts, 'matriz' => $matrix, 'all_consultorios' => $allConsultorios, 'all_turnos' => $allTurnos];
 }
 
 function attention_context(PDO $pdo, array $user, int $unitId, int $consultorioId, ?int $turnoId): array
 {
-    $unitId = (int)($user['unidad_id'] ?? 0);
-    $consultorioId = (int)($user['consultorio_id'] ?? 0);
+    $unitId = $unitId > 0 ? $unitId : (int)($user['unidad_id'] ?? 0);
+    $consultorioId = $consultorioId > 0 ? $consultorioId : (int)($user['consultorio_id'] ?? 0);
     if ($unitId < 1 || $consultorioId < 1) {
         $firstU = $pdo->query('SELECT u.unidad_id, c.consultorio_id FROM unidades u JOIN unidad_consultorio_turno uct ON u.unidad_id=uct.unidad_id JOIN consultorios c ON c.consultorio_id=uct.consultorio_id WHERE u.activo=1 AND c.activo=1 AND uct.activo=1 LIMIT 1')->fetch();
         if ($firstU) {
@@ -212,7 +243,20 @@ function attention_context(PDO $pdo, array $user, int $unitId, int $consultorioI
     } else {
         $allowedIds = array_map(static fn(array $row): int => (int)$row['turno_id'], $allowed);
     }
+    if ($turnoId === null && !empty($user['turno_id'])) {
+        $turnoId = (int)$user['turno_id'];
+    }
     if ($turnoId === null || !in_array($turnoId, $allowedIds, true)) {
+        // Si el usuario eligió un turno válido y activo en sesión, respetarlo aunque no esté en uct
+        if ($turnoId !== null) {
+            $stmtValidT = $pdo->prepare('SELECT turno_id FROM turnos WHERE turno_id=? AND activo=1 LIMIT 1');
+            $stmtValidT->execute([$turnoId]);
+            if (!$stmtValidT->fetch()) {
+                $turnoId = null;
+            }
+        }
+    }
+    if ($turnoId === null) {
         $nowTime = (new DateTimeImmutable('now'))->format('H:i:s');
         $placeholders = implode(',', array_fill(0, count($allowedIds), '?'));
         $stmtT = $pdo->prepare("SELECT turno_id, hora_inicio, hora_fin FROM turnos WHERE turno_id IN ({$placeholders})");
@@ -228,8 +272,8 @@ function attention_context(PDO $pdo, array $user, int $unitId, int $consultorioI
         }
         $turnoId = $matchedTurno ?: $allowedIds[0];
     }
-    $stmt = $pdo->prepare('SELECT u.unidad_id,u.clave unidad_clave,u.nombre unidad_nombre,c.consultorio_id,c.clave consultorio_clave,c.nombre_descriptivo consultorio_nombre,t.turno_id,t.clave turno_clave,t.nombre turno_nombre FROM unidades u JOIN unidad_consultorio_turno uct ON u.unidad_id=uct.unidad_id JOIN consultorios c ON c.consultorio_id=uct.consultorio_id JOIN turnos t ON t.turno_id=? WHERE u.unidad_id=? AND c.consultorio_id=? AND uct.activo=1 LIMIT 1');
-    $stmt->execute([$turnoId, $unitId, $consultorioId]);
+    $stmt = $pdo->prepare('SELECT u.unidad_id,u.clave unidad_clave,u.nombre unidad_nombre,c.consultorio_id,c.clave consultorio_clave,c.nombre_descriptivo consultorio_nombre,t.turno_id,t.clave turno_clave,t.nombre turno_nombre FROM unidades u JOIN consultorios c ON c.consultorio_id=? JOIN turnos t ON t.turno_id=? WHERE u.unidad_id=? LIMIT 1');
+    $stmt->execute([$consultorioId, $turnoId, $unitId]);
     $context = $stmt->fetch();
     if (!$context) throw new InvalidArgumentException('El contexto de atención no es válido.');
     return $context;
@@ -264,8 +308,10 @@ function save_attention(PDO $pdo, array $user): array
     }
     $patient = scoped_patient($pdo, $user, patient_value('patient_ref'));
     if (!$patient) throw new InvalidArgumentException('Paciente no encontrado o fuera del ámbito autorizado.');
-    // Force unit/consultorio from user profile, ignore POST values
-    $context = attention_context($pdo, $user, (int)$user['unidad_id'], (int)$user['consultorio_id'], patient_int('turno_id'));
+    // Priorizar consultorio y turno fijos del paciente si están asignados; respaldo: sesión activa de la enfermera
+    $prefConsultorioId = !empty($patient['consultorio_id']) ? (int)$patient['consultorio_id'] : (int)$user['consultorio_id'];
+    $prefTurnoId = !empty($patient['turno_id']) ? (int)$patient['turno_id'] : patient_int('turno_id');
+    $context = attention_context($pdo, $user, (int)$user['unidad_id'], $prefConsultorioId, $prefTurnoId);
     $companion = companion_payload();
     $now = new DateTimeImmutable('now');
     $date = $now->format('Y-m-d'); $time = $now->format('H:i:s');
@@ -922,17 +968,22 @@ function save_prostate_questionnaire(PDO $pdo, array $user): array
         }
     }
 
+    $activeConsultorioId = !empty($user['consultorio_id']) ? (int)$user['consultorio_id'] : null;
+    $activeTurnoId = !empty($user['turno_id']) ? (int)$user['turno_id'] : 1;
+
     $pdo->beginTransaction();
     try {
         if ($existing) {
             $dcId = (int)$existing['id'];
             $stmtUp = $pdo->prepare(
                 'UPDATE dc_prostata
-                 SET id_usuario = ?, fecha = ?, grupo_riesgo = ?, puntaje_total = ?, valoracion = ?, f_actualizacion = CURRENT_TIMESTAMP
+                 SET id_usuario = ?, consultorio_id = ?, turno_id = ?, fecha = ?, grupo_riesgo = ?, puntaje_total = ?, valoracion = ?, f_actualizacion = CURRENT_TIMESTAMP
                  WHERE id = ? AND id_paciente = ?'
             );
             $stmtUp->execute([
                 (int)$user['usuario_id'],
+                $activeConsultorioId,
+                $activeTurnoId,
                 $fecha,
                 $grupoRiesgo,
                 $puntajeTotal,
@@ -942,12 +993,14 @@ function save_prostate_questionnaire(PDO $pdo, array $user): array
             ]);
         } else {
             $stmtIns = $pdo->prepare(
-                'INSERT INTO dc_prostata (id_paciente, id_usuario, fecha, grupo_riesgo, puntaje_total, valoracion)
-                 VALUES (?, ?, ?, ?, ?, ?)'
+                'INSERT INTO dc_prostata (id_paciente, id_usuario, consultorio_id, turno_id, fecha, grupo_riesgo, puntaje_total, valoracion)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmtIns->execute([
                 (int)$patient['paciente_id'],
                 (int)$user['usuario_id'],
+                $activeConsultorioId,
+                $activeTurnoId,
                 $fecha,
                 $grupoRiesgo,
                 $puntajeTotal,
@@ -1243,17 +1296,22 @@ function save_mental_health_questionnaire(PDO $pdo, array $user): array
         }
     }
 
+    $activeConsultorioId = !empty($user['consultorio_id']) ? (int)$user['consultorio_id'] : null;
+    $activeTurnoId = !empty($user['turno_id']) ? (int)$user['turno_id'] : 1;
+
     $pdo->beginTransaction();
     try {
         if ($existing) {
             $dcId = (int)$existing['id'];
             $stmtUp = $pdo->prepare(
                 'UPDATE dc_salud_mental
-                 SET id_usuario = ?, fecha = ?, puntaje_phq4 = ?, puntaje_ansiedad = ?, puntaje_depresion = ?, ataque_panico = ?, valoracion = ?, clave_up = ?, sitio_envio = ?, f_actualizacion = CURRENT_TIMESTAMP
+                 SET id_usuario = ?, consultorio_id = ?, turno_id = ?, fecha = ?, puntaje_phq4 = ?, puntaje_ansiedad = ?, puntaje_depresion = ?, ataque_panico = ?, valoracion = ?, clave_up = ?, sitio_envio = ?, f_actualizacion = CURRENT_TIMESTAMP
                  WHERE id = ? AND id_paciente = ?'
             );
             $stmtUp->execute([
                 (int)$user['usuario_id'],
+                $activeConsultorioId,
+                $activeTurnoId,
                 $fecha,
                 $puntajePhq4,
                 $puntajeAnsiedad,
@@ -1267,12 +1325,14 @@ function save_mental_health_questionnaire(PDO $pdo, array $user): array
             ]);
         } else {
             $stmtIns = $pdo->prepare(
-                'INSERT INTO dc_salud_mental (id_paciente, id_usuario, fecha, puntaje_phq4, puntaje_ansiedad, puntaje_depresion, ataque_panico, valoracion, clave_up, sitio_envio)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                'INSERT INTO dc_salud_mental (id_paciente, id_usuario, consultorio_id, turno_id, fecha, puntaje_phq4, puntaje_ansiedad, puntaje_depresion, ataque_panico, valoracion, clave_up, sitio_envio)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmtIns->execute([
                 (int)$patient['paciente_id'],
                 (int)$user['usuario_id'],
+                $activeConsultorioId,
+                $activeTurnoId,
                 $fecha,
                 $puntajePhq4,
                 $puntajeAnsiedad,
@@ -1338,6 +1398,46 @@ try {
     $pdo = db(); $user = patient_user($pdo); $action = (string)($_GET['action'] ?? $_POST['action'] ?? 'list');
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         if ($action === 'context') patient_json(['ok' => true, 'context' => context_data($pdo, $user)]);
+        if (in_array($action, ['profile_context', 'get_user_context_options'], true)) {
+            $unitId = (int)($user['unidad_id'] ?? 0);
+            $consultorios = [];
+            if ($unitId > 0) {
+                $stmtCons = $pdo->prepare(
+                    'SELECT DISTINCT c.consultorio_id, c.clave, c.nombre_descriptivo
+                     FROM consultorios c
+                     JOIN unidad_consultorio_turno uct ON uct.consultorio_id = c.consultorio_id AND uct.activo = 1
+                     WHERE c.activo = 1 AND uct.unidad_id = ?
+                     ORDER BY c.consultorio_id ASC'
+                );
+                $stmtCons->execute([$unitId]);
+                $consultorios = $stmtCons->fetchAll(PDO::FETCH_ASSOC);
+            }
+            if (!$consultorios) {
+                $consultorios = $pdo->query('SELECT consultorio_id, clave, nombre_descriptivo FROM consultorios WHERE activo = 1 ORDER BY consultorio_id ASC')->fetchAll(PDO::FETCH_ASSOC);
+            }
+            $turnos = $pdo->query('SELECT turno_id, clave, nombre FROM turnos WHERE activo = 1 ORDER BY turno_id ASC')->fetchAll(PDO::FETCH_ASSOC);
+
+            patient_json([
+                'ok' => true,
+                'user' => [
+                    'usuario_id' => (int)$user['usuario_id'],
+                    'matricula' => (string)($user['matricula'] ?? ''),
+                    'prefijo' => (string)($user['prefijo'] ?? 'L.E.'),
+                    'nombre' => (string)($user['nombre'] ?? ''),
+                    'unidad_id' => $user['unidad_id'] !== null ? (int)$user['unidad_id'] : null,
+                    'unidad_clave' => (string)($user['unidad_clave'] ?? ''),
+                    'unidad_nombre' => (string)($user['unidad_nombre'] ?? ''),
+                    'consultorio_id' => $user['consultorio_id'] !== null ? (int)$user['consultorio_id'] : null,
+                    'consultorio_clave' => (string)($user['consultorio_clave'] ?? ''),
+                    'consultorio_nombre' => (string)($user['consultorio_nombre'] ?? ''),
+                    'turno_id' => (int)($user['turno_id'] ?? 1),
+                    'turno_clave' => (string)($user['turno_clave'] ?? 'MAT'),
+                    'turno_nombre' => (string)($user['turno_nombre'] ?? 'Matutino'),
+                ],
+                'consultorios' => $consultorios,
+                'turnos' => $turnos,
+            ]);
+        }
         if ($action === 'patient') { $patient = scoped_patient($pdo, $user, (string)($_GET['ref'] ?? '')); if (!$patient) patient_json(['ok' => false, 'message' => 'Paciente no encontrado.'], 404); patient_json(['ok' => true, 'patient' => present_patient($patient)]); }
         if ($action === 'vaccines') { $patient = scoped_patient($pdo, $user, (string)($_GET['ref'] ?? '')); if (!$patient) patient_json(['ok' => false, 'message' => 'Paciente no encontrado.'], 404); patient_json(['ok' => true, 'patient' => present_patient($patient), 'vaccines' => vaccine_state($pdo, $user, $patient)]); }
         if (in_array($action, ['attention_history', 'get_attention_history'], true)) {
@@ -1439,15 +1539,16 @@ try {
             $rawQuery = trim((string)($_GET['q'] ?? ''));
             $query = $rawQuery !== '' ? normalize_text($rawQuery) : '';
 
-            [$scope, $scopeParams] = patient_scope($user, 'p', 'a');
+            [$scopeLast, $scopeLastParams] = patient_scope($user, 'p', 'a_last');
+            [$scopeEv, $scopeEvParams] = patient_scope($user, 'p', 'a');
             $where = ['1=1'];
-            $params = $scopeParams;
+            $whereParams = [];
 
             // Solo agregar condición de fecha si los parámetros vienen presentes, no vacíos y con formato válido
             if ($dateStart !== '' && $dateEnd !== '') {
-                $where[] = 'a.fecha BETWEEN ? AND ?';
-                $params[] = $dateStart;
-                $params[] = $dateEnd;
+                $where[] = 'DATE(ult.fecha_hora) BETWEEN ? AND ?';
+                $whereParams[] = $dateStart;
+                $whereParams[] = $dateEnd;
             }
 
             // Solo agregar condición de búsqueda por nombre/NSS si tiene al menos 1 carácter válido tras trim()
@@ -1455,26 +1556,29 @@ try {
                 $compact = preg_replace('/[\s-]+/', '', $query);
                 if (preg_match('/^(\d{10})(?:([0-9]))?([A-Z0-9]{8})?$/', (string)$compact, $m)) {
                     $where[] = 'p.nss=?';
-                    $params[] = $m[1];
+                    $whereParams[] = $m[1];
                     if (isset($m[2]) && $m[2] !== '') {
                         $where[] = 'p.dv=?';
-                        $params[] = $m[2];
+                        $whereParams[] = $m[2];
                     }
                     if (isset($m[3]) && $m[3] !== '') {
                         $where[] = 'p.agregado=?';
-                        $params[] = $m[3];
+                        $whereParams[] = $m[3];
                     }
                 } else {
                     $like = '%' . $query . '%';
                     $where[] = '(p.nss LIKE ? OR p.agregado LIKE ? OR p.curp LIKE ? OR p.apellido_paterno LIKE ? OR p.apellido_materno LIKE ? OR p.nombres LIKE ? OR CONCAT_WS(" ",p.apellido_paterno,p.apellido_materno,p.nombres) LIKE ? OR CONCAT_WS(" ",p.nombres,p.apellido_paterno,p.apellido_materno) LIKE ?)';
-                    array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
+                    array_push($whereParams, $like, $like, $like, $like, $like, $like, $like, $like);
                 }
             }
 
+            $params = array_merge($scopeLastParams, $scopeEvParams, $whereParams);
+
             $sql = 'SELECT
-                        a.public_id AS atencion_public_id,
-                        a.fecha,
-                        a.hora,
+                        (SELECT a_last.public_id FROM atenciones a_last WHERE a_last.paciente_id = p.paciente_id AND a_last.estado = "ACTIVA" AND (' . $scopeLast . ') ORDER BY a_last.fecha DESC, a_last.hora DESC, a_last.atencion_id DESC LIMIT 1) AS atencion_public_id,
+                        DATE(ult.fecha_hora) AS fecha,
+                        TIME(ult.fecha_hora) AS hora,
+                        ult.tipo_evento AS ultimo_tipo_evento,
                         p.paciente_id,
                         p.public_id AS paciente_public_id,
                         p.nss,
@@ -1486,8 +1590,10 @@ try {
                         p.apellido_materno,
                         p.nombres,
                         p.sexo,
-                        c.clave AS consultorio_clave,
-                        t.clave AS turno_clave,
+                        p.consultorio_id AS paciente_consultorio_id,
+                        p.turno_id AS paciente_turno_id,
+                        COALESCE(cp.clave, c.clave) AS consultorio_clave,
+                        COALESCE(tp.clave, t.clave) AS turno_clave,
                         e.nombre AS enfermera_nombre,
                         (SELECT dcp.id FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_id,
                         (SELECT dcp.puntaje_total FROM dc_prostata dcp WHERE dcp.id_paciente = p.paciente_id ORDER BY dcp.fecha DESC, dcp.id DESC LIMIT 1) AS prostata_puntaje,
@@ -1497,19 +1603,46 @@ try {
                         (SELECT dcsm.ataque_panico FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_panico,
                         (SELECT dcsm.valoracion FROM dc_salud_mental dcsm WHERE dcsm.id_paciente = p.paciente_id ORDER BY dcsm.fecha DESC, dcsm.id DESC LIMIT 1) AS salud_mental_valoracion
                     FROM pacientes p
-                    LEFT JOIN atenciones a ON a.paciente_id = p.paciente_id AND a.estado = "ACTIVA" AND (' . $scope . ')
-                    LEFT JOIN consultorios c ON c.consultorio_id = a.consultorio_id
-                    LEFT JOIN turnos t ON t.turno_id = a.turno_id
-                    LEFT JOIN usuarios e ON e.usuario_id = a.enfermera_id
+                    LEFT JOIN (
+                        SELECT
+                            ev.paciente_id,
+                            ev.fecha_hora,
+                            ev.consultorio_id,
+                            ev.turno_id,
+                            ev.usuario_id,
+                            ev.tipo_evento,
+                            ROW_NUMBER() OVER (PARTITION BY ev.paciente_id ORDER BY ev.fecha_hora DESC, ev.orden_desempate DESC) AS rn
+                        FROM (
+                            SELECT a.paciente_id, TIMESTAMP(a.fecha, a.hora) AS fecha_hora, a.consultorio_id, a.turno_id, a.enfermera_id AS usuario_id, "ATENCION" AS tipo_evento, a.atencion_id AS orden_desempate
+                            FROM atenciones a
+                            WHERE a.estado = "ACTIVA" AND (' . $scopeEv . ')
+                            UNION ALL
+                            SELECT dcp.id_paciente AS paciente_id, TIMESTAMP(dcp.fecha, TIME(dcp.f_creacion)) AS fecha_hora, COALESCE(dcp.consultorio_id, u_p.consultorio_id) AS consultorio_id, COALESCE(dcp.turno_id, 1) AS turno_id, dcp.id_usuario AS usuario_id, "PROSTATA" AS tipo_evento, dcp.id AS orden_desempate
+                            FROM dc_prostata dcp
+                            LEFT JOIN usuarios u_p ON u_p.usuario_id = dcp.id_usuario
+                            UNION ALL
+                            SELECT dcsm.id_paciente AS paciente_id, TIMESTAMP(dcsm.fecha, TIME(dcsm.f_creacion)) AS fecha_hora, COALESCE(dcsm.consultorio_id, u_sm.consultorio_id) AS consultorio_id, COALESCE(dcsm.turno_id, 1) AS turno_id, dcsm.id_usuario AS usuario_id, "SALUD_MENTAL" AS tipo_evento, dcsm.id AS orden_desempate
+                            FROM dc_salud_mental dcsm
+                            LEFT JOIN usuarios u_sm ON u_sm.usuario_id = dcsm.id_usuario
+                            UNION ALL
+                            SELECT tm.paciente_id, tm.fecha_hora, tm.consultorio_id, COALESCE(tm.turno_id, 1) AS turno_id, tm.usuario_id, tm.tipo_tamizaje AS tipo_evento, tm.id AS orden_desempate
+                            FROM atenciones_tamizajes tm
+                        ) ev
+                    ) ult ON ult.paciente_id = p.paciente_id AND ult.rn = 1
+                    LEFT JOIN consultorios cp ON cp.consultorio_id = p.consultorio_id
+                    LEFT JOIN turnos tp ON tp.turno_id = p.turno_id
+                    LEFT JOIN consultorios c ON c.consultorio_id = ult.consultorio_id
+                    LEFT JOIN turnos t ON t.turno_id = ult.turno_id
+                    LEFT JOIN usuarios e ON e.usuario_id = ult.usuario_id
                     WHERE ' . implode(' AND ', $where) . '
-                    ORDER BY COALESCE(a.fecha, DATE(p.created_at)) DESC, COALESCE(a.hora, TIME(p.created_at)) DESC, p.paciente_id DESC
+                    ORDER BY COALESCE(ult.fecha_hora, p.created_at) DESC, p.paciente_id DESC
                     LIMIT 250';
 
             $stmt = $pdo->prepare($sql);
             $stmt->execute($params);
             $rows = array_map(static function (array $row): array {
-                $hasAttention = !empty($row['atencion_public_id']);
-                $row['patient_only'] = !$hasAttention;
+                $hasActivity = !empty($row['fecha']);
+                $row['patient_only'] = !$hasActivity;
                 $row['has_prostata'] = !empty($row['prostata_id']);
                 $row['has_salud_mental'] = !empty($row['salud_mental_id']);
                 $row['nombre_completo'] = normalize_spaces(implode(' ', array_filter([
@@ -1537,16 +1670,26 @@ try {
         $data = patient_payload(); $ref = patient_value('public_id'); $existing = $ref !== '' ? scoped_patient($pdo, $user, $ref) : null; if ($ref !== '' && !$existing) throw new InvalidArgumentException('Paciente no encontrado.');
         $dupe = $pdo->prepare('SELECT public_id FROM pacientes WHERE nss=? AND agregado=? AND (? = "" OR public_id <> ?) LIMIT 1'); $dupe->execute([$data['nss'], $data['agregado'], $ref, $ref]); if ($duplicate = $dupe->fetch()) patient_json(['ok' => false, 'code' => 'DUPLICATE', 'message' => 'Ya existe un paciente con ese NSS y agregado.', 'public_id' => $duplicate['public_id']], 409);
         $data['unidad_adscripcion_id'] = null;
+        if ($data['consultorio_id'] !== null) {
+            $stmtValC = $pdo->prepare('SELECT consultorio_id FROM consultorios WHERE consultorio_id=? AND activo=1 LIMIT 1');
+            $stmtValC->execute([$data['consultorio_id']]);
+            if (!$stmtValC->fetch()) $data['consultorio_id'] = null;
+        }
+        if ($data['turno_id'] !== null) {
+            $stmtValT = $pdo->prepare('SELECT turno_id FROM turnos WHERE turno_id=? AND activo=1 LIMIT 1');
+            $stmtValT->execute([$data['turno_id']]);
+            if (!$stmtValT->fetch()) $data['turno_id'] = null;
+        }
         if ($existing) {
-            $stmt = $pdo->prepare('UPDATE pacientes SET dv=?,unidad_adscripcion_id=?,curp=?,escolaridad=?,ocupacion=?,estado_civil=?,apellido_paterno=?,apellido_materno=?,nombres=?,fecha_nacimiento=?,lugar_nacimiento=?,sexo=?,indigena=?,afromexicano=?,discapacidad=?,pais_residencia=?,entidad_residencia=?,municipio=?,colonia=?,calle=?,numero_exterior=?,numero_interior=?,codigo_postal=?,telefono=?,otro_contacto=?,domicilio=? WHERE paciente_id=?');
-            $stmt->execute([$data['dv'], $data['unidad_adscripcion_id'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio'], (int)$existing['paciente_id']]);
+            $stmt = $pdo->prepare('UPDATE pacientes SET dv=?,unidad_adscripcion_id=?,consultorio_id=?,turno_id=?,curp=?,escolaridad=?,ocupacion=?,estado_civil=?,apellido_paterno=?,apellido_materno=?,nombres=?,fecha_nacimiento=?,lugar_nacimiento=?,sexo=?,indigena=?,afromexicano=?,discapacidad=?,pais_residencia=?,entidad_residencia=?,municipio=?,colonia=?,calle=?,numero_exterior=?,numero_interior=?,codigo_postal=?,telefono=?,otro_contacto=?,domicilio=? WHERE paciente_id=?');
+            $stmt->execute([$data['dv'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio'], (int)$existing['paciente_id']]);
             $after = scoped_patient($pdo, $user, $ref);
             audit($pdo, $user, 'MODIFICACIÓN PACIENTE', 'pacientes', (int)$existing['paciente_id'], $existing, $after);
             $message = 'DATOS ACTUALIZADOS.';
         } else {
             $data['public_id'] = public_id();
-            $stmt = $pdo->prepare('INSERT INTO pacientes (public_id,nss,dv,agregado,curp,escolaridad,ocupacion,estado_civil,unidad_adscripcion_id,apellido_paterno,apellido_materno,nombres,fecha_nacimiento,lugar_nacimiento,sexo,indigena,afromexicano,discapacidad,pais_residencia,entidad_residencia,municipio,colonia,calle,numero_exterior,numero_interior,codigo_postal,telefono,otro_contacto,domicilio) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
-            $stmt->execute([$data['public_id'], $data['nss'], $data['dv'], $data['agregado'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['unidad_adscripcion_id'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio']]);
+            $stmt = $pdo->prepare('INSERT INTO pacientes (public_id,nss,dv,agregado,curp,escolaridad,ocupacion,estado_civil,unidad_adscripcion_id,consultorio_id,turno_id,apellido_paterno,apellido_materno,nombres,fecha_nacimiento,lugar_nacimiento,sexo,indigena,afromexicano,discapacidad,pais_residencia,entidad_residencia,municipio,colonia,calle,numero_exterior,numero_interior,codigo_postal,telefono,otro_contacto,domicilio) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+            $stmt->execute([$data['public_id'], $data['nss'], $data['dv'], $data['agregado'], $data['curp'], $data['escolaridad'], $data['ocupacion'], $data['estado_civil'], $data['unidad_adscripcion_id'], $data['consultorio_id'], $data['turno_id'], $data['apellido_paterno'], $data['apellido_materno'], $data['nombres'], $data['fecha_nacimiento'], $data['lugar_nacimiento'], $data['sexo'], $data['indigena'], $data['afromexicano'], $data['discapacidad'], $data['pais_residencia'], $data['entidad_residencia'], $data['municipio'], $data['colonia'], $data['calle'], $data['numero_exterior'], $data['numero_interior'], $data['codigo_postal'], $data['telefono'], $data['otro_contacto'], $data['domicilio']]);
             $after = scoped_patient($pdo, $user, $data['public_id']);
             audit($pdo, $user, 'ALTA PACIENTE', 'pacientes', (int)$pdo->lastInsertId(), null, $after);
             $message = 'PACIENTE REGISTRADO CORRECTAMENTE.';
@@ -1586,6 +1729,72 @@ try {
             'history' => $res['history'],
             'record' => $res['record'],
             'answers' => $res['answers'],
+        ]);
+    }
+    if (in_array($action, ['update_my_profile', 'update_own_profile'], true)) {
+        $prefijo = normalize_spaces(mb_strtoupper(patient_value('prefijo'), 'UTF-8'));
+        $nombre = normalize_spaces(mb_strtoupper(patient_value('nombre'), 'UTF-8'));
+        if ($prefijo === '' || mb_strlen($prefijo, 'UTF-8') > 25) {
+            throw new InvalidArgumentException('El prefijo es obligatorio (máximo 25 caracteres).');
+        }
+        if ($nombre === '' || mb_strlen($nombre, 'UTF-8') > 180) {
+            throw new InvalidArgumentException('El nombre completo es obligatorio (máximo 180 caracteres).');
+        }
+        $before = ['prefijo' => $user['prefijo'] ?? 'L.E.', 'nombre' => $user['nombre'] ?? ''];
+        $stmtUp = $pdo->prepare('UPDATE usuarios SET prefijo = ?, nombre = ? WHERE usuario_id = ?');
+        $stmtUp->execute([$prefijo, $nombre, (int)$user['usuario_id']]);
+        $updatedUser = Auth::updateSession(['prefijo' => $prefijo, 'nombre' => $nombre]);
+        audit($pdo, $updatedUser, 'ACTUALIZACIÓN PERFIL PROPIO', 'usuarios', (int)$user['usuario_id'], $before, ['prefijo' => $prefijo, 'nombre' => $nombre]);
+        patient_json([
+            'ok' => true,
+            'message' => 'PERFIL ACTUALIZADO CORRECTAMENTE.',
+            'user' => [
+                'prefijo' => $prefijo,
+                'nombre' => $nombre,
+            ],
+        ]);
+    }
+    if (in_array($action, ['update_my_context', 'update_own_context'], true)) {
+        $consultorioId = (int)patient_value('consultorio_id');
+        $turnoId = (int)patient_value('turno_id');
+        if ($consultorioId <= 0 || $turnoId <= 0) {
+            throw new InvalidArgumentException('Debes seleccionar un consultorio y un turno válidos.');
+        }
+        $stmtC = $pdo->prepare('SELECT consultorio_id, clave, nombre_descriptivo FROM consultorios WHERE consultorio_id = ? AND activo = 1 LIMIT 1');
+        $stmtC->execute([$consultorioId]);
+        $cons = $stmtC->fetch(PDO::FETCH_ASSOC);
+        if (!$cons) {
+            throw new InvalidArgumentException('El consultorio seleccionado no está disponible.');
+        }
+        $stmtT = $pdo->prepare('SELECT turno_id, clave, nombre FROM turnos WHERE turno_id = ? AND activo = 1 LIMIT 1');
+        $stmtT->execute([$turnoId]);
+        $turno = $stmtT->fetch(PDO::FETCH_ASSOC);
+        if (!$turno) {
+            throw new InvalidArgumentException('El turno seleccionado no está disponible.');
+        }
+        $before = [
+            'consultorio_id' => $user['consultorio_id'] ?? null,
+            'turno_id' => $user['turno_id'] ?? null,
+        ];
+        $stmtUp = $pdo->prepare('UPDATE usuarios SET consultorio_id = ? WHERE usuario_id = ?');
+        $stmtUp->execute([$consultorioId, (int)$user['usuario_id']]);
+        $sessionUpdates = [
+            'consultorio_id' => (int)$cons['consultorio_id'],
+            'consultorio_clave' => (string)$cons['clave'],
+            'consultorio_nombre' => (string)$cons['nombre_descriptivo'],
+            'turno_id' => (int)$turno['turno_id'],
+            'turno_clave' => (string)$turno['clave'],
+            'turno_nombre' => (string)$turno['nombre'],
+        ];
+        $updatedUser = Auth::updateSession($sessionUpdates);
+        audit($pdo, $updatedUser, 'CAMBIO CONSULTORIO/TURNO', 'usuarios', (int)$user['usuario_id'], $before, $sessionUpdates);
+        patient_json([
+            'ok' => true,
+            'message' => 'CONSULTORIO Y TURNO ACTUALIZADOS CORRECTAMENTE.',
+            'user' => array_merge($sessionUpdates, [
+                'unidad_nombre' => (string)($updatedUser['unidad_nombre'] ?? ''),
+                'unidad_clave' => (string)($updatedUser['unidad_clave'] ?? ''),
+            ]),
         ]);
     }
     patient_json(['ok' => false, 'message' => 'Acción no reconocida.'], 404);

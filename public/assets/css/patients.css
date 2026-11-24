@@ -116,6 +116,34 @@ body.patients-page {
   color: var(--srae-text-muted);
 }
 
+.patients-topbar .nav-user-trigger {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: right;
+  font-family: inherit;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.patients-topbar .nav-user-trigger:hover {
+  background: #eef6f3;
+  color: var(--srae-imss-green);
+}
+
+.patients-topbar .nav-user-trigger:focus-visible {
+  outline: 2px solid var(--srae-teal);
+  outline-offset: 2px;
+}
+
+.modal-header-quick {
+  max-width: 440px;
+  width: 92vw;
+  padding: 22px 24px;
+}
+
 .patients-topbar .nav-logout {
   color: #c62828 !important;
   font-size: 13px;

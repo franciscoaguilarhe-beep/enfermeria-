@@ -99,9 +99,19 @@ function require_fresh_user(): array
         flash('error', 'Tu cuenta ha sido desactivada.');
         redirect(base_url('index.php?r=login'));
     }
-    // Update session with fresh data
+    // Update session with fresh data while preserving active turno in session
     unset($user['password_hash']);
     $user['prefijo'] = trim((string)($user['prefijo'] ?? 'L.E.')) ?: 'L.E.';
+    if (!empty($session['turno_id']) && !empty($session['turno_nombre'])) {
+        $user['turno_id'] = (int)$session['turno_id'];
+        $user['turno_clave'] = (string)($session['turno_clave'] ?? '');
+        $user['turno_nombre'] = (string)$session['turno_nombre'];
+    } else {
+        $defaultTurno = Auth::resolveDefaultTurno($pdo);
+        $user['turno_id'] = $defaultTurno['turno_id'];
+        $user['turno_clave'] = $defaultTurno['turno_clave'];
+        $user['turno_nombre'] = $defaultTurno['turno_nombre'];
+    }
     $_SESSION['srae_user'] = $user;
     return $user;
 }

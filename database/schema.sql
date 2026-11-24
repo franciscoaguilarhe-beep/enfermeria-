@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS pacientes (
   paciente_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   nss CHAR(10) NOT NULL,
   agregado CHAR(8) NOT NULL,
+  consultorio_id INT UNSIGNED NULL DEFAULT NULL,
+  turno_id INT UNSIGNED NULL DEFAULT NULL,
   apellido_paterno VARCHAR(100) NULL,
   apellido_materno VARCHAR(100) NULL,
   nombres VARCHAR(160) NOT NULL,
@@ -77,7 +79,11 @@ CREATE TABLE IF NOT EXISTS pacientes (
   UNIQUE KEY uq_pacientes_identidad (nss, agregado),
   KEY idx_pacientes_nss (nss),
   KEY idx_pacientes_nombre (apellido_paterno, apellido_materno, nombres),
-  KEY idx_pacientes_fecha_nacimiento (fecha_nacimiento)
+  KEY idx_pacientes_fecha_nacimiento (fecha_nacimiento),
+  KEY fk_pacientes_consultorio (consultorio_id),
+  KEY fk_pacientes_turno (turno_id),
+  CONSTRAINT fk_pacientes_consultorio FOREIGN KEY (consultorio_id) REFERENCES consultorios(consultorio_id) ON DELETE SET NULL,
+  CONSTRAINT fk_pacientes_turno FOREIGN KEY (turno_id) REFERENCES turnos(turno_id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS atenciones (
@@ -174,6 +180,8 @@ CREATE TABLE IF NOT EXISTS dc_prostata (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   id_paciente INT UNSIGNED NOT NULL,
   id_usuario INT UNSIGNED NOT NULL,
+  consultorio_id INT UNSIGNED NULL,
+  turno_id INT UNSIGNED NULL,
   fecha DATE NOT NULL,
   grupo_riesgo ENUM('40_44_AHF', '45_74') NOT NULL DEFAULT '45_74' COMMENT '40_44_AHF = Hombres 40 a 44 años con antecedente heredofamiliar, 45_74 = Hombres 45 a 74 años',
   puntaje_total TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -182,8 +190,12 @@ CREATE TABLE IF NOT EXISTS dc_prostata (
   f_actualizacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_dc_prostata_paciente_fecha (id_paciente, fecha),
   KEY fk_dc_prostata_usuario (id_usuario),
+  KEY fk_dc_prostata_consultorio (consultorio_id),
+  KEY fk_dc_prostata_turno (turno_id),
   CONSTRAINT fk_dc_prostata_paciente FOREIGN KEY (id_paciente) REFERENCES pacientes(paciente_id) ON DELETE CASCADE,
-  CONSTRAINT fk_dc_prostata_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(usuario_id)
+  CONSTRAINT fk_dc_prostata_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(usuario_id),
+  CONSTRAINT fk_dc_prostata_consultorio FOREIGN KEY (consultorio_id) REFERENCES consultorios(consultorio_id) ON DELETE SET NULL,
+  CONSTRAINT fk_dc_prostata_turno FOREIGN KEY (turno_id) REFERENCES turnos(turno_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS dc_prostata_respuestas (
@@ -226,6 +238,8 @@ CREATE TABLE IF NOT EXISTS dc_salud_mental (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   id_paciente INT UNSIGNED NOT NULL,
   id_usuario INT UNSIGNED NOT NULL,
+  consultorio_id INT UNSIGNED NULL,
+  turno_id INT UNSIGNED NULL,
   fecha DATE NOT NULL,
   puntaje_phq4 TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Suma de preguntas 1 a 4 (0 a 12)',
   puntaje_ansiedad TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Suma P1 + P2 (0 a 6)',
@@ -238,8 +252,12 @@ CREATE TABLE IF NOT EXISTS dc_salud_mental (
   f_actualizacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_dc_sm_paciente_fecha (id_paciente, fecha),
   KEY fk_dc_sm_usuario (id_usuario),
+  KEY fk_dc_sm_consultorio (consultorio_id),
+  KEY fk_dc_sm_turno (turno_id),
   CONSTRAINT fk_dc_sm_paciente FOREIGN KEY (id_paciente) REFERENCES pacientes(paciente_id) ON DELETE CASCADE,
-  CONSTRAINT fk_dc_sm_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(usuario_id)
+  CONSTRAINT fk_dc_sm_usuario FOREIGN KEY (id_usuario) REFERENCES usuarios(usuario_id),
+  CONSTRAINT fk_dc_sm_consultorio FOREIGN KEY (consultorio_id) REFERENCES consultorios(consultorio_id) ON DELETE SET NULL,
+  CONSTRAINT fk_dc_sm_turno FOREIGN KEY (turno_id) REFERENCES turnos(turno_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS dc_salud_mental_respuestas (
@@ -251,4 +269,23 @@ CREATE TABLE IF NOT EXISTS dc_salud_mental_respuestas (
   KEY fk_dc_sm_resp_pregunta (id_pregunta),
   CONSTRAINT fk_dc_sm_resp_encabezado FOREIGN KEY (id_dc_sm) REFERENCES dc_salud_mental(id) ON DELETE CASCADE,
   CONSTRAINT fk_dc_sm_resp_pregunta FOREIGN KEY (id_pregunta) REFERENCES cat_preguntas_salud_mental(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS atenciones_tamizajes (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  paciente_id INT UNSIGNED NOT NULL,
+  usuario_id INT UNSIGNED NOT NULL,
+  consultorio_id INT UNSIGNED NULL,
+  turno_id INT UNSIGNED NULL,
+  tipo_tamizaje VARCHAR(50) NOT NULL,
+  fecha_hora DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_tamizajes_paciente_fecha (paciente_id, fecha_hora),
+  KEY idx_tamizajes_tipo (tipo_tamizaje),
+  KEY fk_tamizajes_usuario (usuario_id),
+  KEY fk_tamizajes_consultorio (consultorio_id),
+  KEY fk_tamizajes_turno (turno_id),
+  CONSTRAINT fk_tamizajes_paciente FOREIGN KEY (paciente_id) REFERENCES pacientes(paciente_id) ON DELETE CASCADE,
+  CONSTRAINT fk_tamizajes_usuario FOREIGN KEY (usuario_id) REFERENCES usuarios(usuario_id),
+  CONSTRAINT fk_tamizajes_consultorio FOREIGN KEY (consultorio_id) REFERENCES consultorios(consultorio_id) ON DELETE SET NULL,
+  CONSTRAINT fk_tamizajes_turno FOREIGN KEY (turno_id) REFERENCES turnos(turno_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

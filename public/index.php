@@ -6,10 +6,26 @@ require_once dirname(__DIR__) . "/config/bootstrap.php";
 function fetch_attention(PDO $pdo, string $ref): ?array
 {
     if (!preg_match("/^[a-f0-9]{32}$/i", $ref)) return null;
-    $sql = "SELECT a.*, p.*, p.public_id AS paciente_public_id, a.public_id AS atencion_public_id, u.nombre AS unidad_nombre, c.nombre_descriptivo AS consultorio_nombre, t.nombre AS turno_nombre, e.nombre AS enfermera_nombre, e.matricula FROM atenciones a JOIN pacientes p ON p.paciente_id=a.paciente_id JOIN unidades u ON u.unidad_id=a.unidad_id JOIN consultorios c ON c.consultorio_id=a.consultorio_id JOIN turnos t ON t.turno_id=a.turno_id JOIN usuarios e ON e.usuario_id=a.enfermera_id WHERE a.public_id=?";
+    $sql = "SELECT a.*, p.*, p.public_id AS paciente_public_id, a.public_id AS atencion_public_id, u.nombre AS unidad_nombre, COALESCE(cp.clave, c.clave) AS consultorio_clave, COALESCE(cp.nombre_descriptivo, c.nombre_descriptivo) AS consultorio_nombre, COALESCE(tp.clave, t.clave) AS turno_clave, COALESCE(tp.nombre, t.nombre) AS turno_nombre, e.nombre AS enfermera_nombre, e.matricula FROM atenciones a JOIN pacientes p ON p.paciente_id=a.paciente_id JOIN unidades u ON u.unidad_id=a.unidad_id JOIN consultorios c ON c.consultorio_id=a.consultorio_id JOIN turnos t ON t.turno_id=a.turno_id LEFT JOIN consultorios cp ON cp.consultorio_id=p.consultorio_id LEFT JOIN turnos tp ON tp.turno_id=p.turno_id JOIN usuarios e ON e.usuario_id=a.enfermera_id WHERE a.public_id=?";
     $s = $pdo->prepare($sql);
     $s->execute([$ref]);
     return $s->fetch() ?: null;
+}
+
+function fetch_patient_with_assignment(PDO $pdo, string $byField, int|string $value): ?array
+{
+    $allowed = $byField === 'paciente_id' ? 'p.paciente_id' : 'p.public_id';
+    $stmt = $pdo->prepare(
+        "SELECT p.*, cp.clave AS paciente_consultorio_clave, cp.nombre_descriptivo AS paciente_consultorio_nombre,
+                tp.clave AS paciente_turno_clave, tp.nombre AS paciente_turno_nombre
+         FROM pacientes p
+         LEFT JOIN consultorios cp ON cp.consultorio_id = p.consultorio_id
+         LEFT JOIN turnos tp ON tp.turno_id = p.turno_id
+         WHERE {$allowed} = ?
+         LIMIT 1"
+    );
+    $stmt->execute([$value]);
+    return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 
 $route = (string)($_GET["r"] ?? $_POST["r"] ?? "dashboard");
@@ -128,17 +144,13 @@ if ($route === "pdf_prostata") {
         }
 
         // Soportar ref como public_id de paciente o public_id de atención
-        $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE public_id = ? LIMIT 1");
-        $stmtPat->execute([$ref]);
-        $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+        $patient = fetch_patient_with_assignment($pdoPdf, 'public_id', $ref);
 
         $attention = null;
         if (!$patient) {
             $attention = fetch_attention($pdoPdf, $ref);
             if ($attention) {
-                $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE paciente_id = ? LIMIT 1");
-                $stmtPat->execute([(int)$attention["paciente_id"]]);
-                $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+                $patient = fetch_patient_with_assignment($pdoPdf, 'paciente_id', (int)$attention["paciente_id"]);
             }
         }
 
@@ -182,8 +194,8 @@ if ($route === "pdf_prostata") {
             "matricula" => $record["enfermera_matricula"] ?? ($attention["matricula"] ?? ($user["matricula"] ?? "")),
             "unidad_clave" => $record["unidad_clave"] ?? ($user["unidad_clave"] ?? ""),
             "unidad_nombre" => $record["unidad_nombre"] ?? ($attention["unidad_nombre"] ?? ($user["unidad_nombre"] ?? "")),
-            "consultorio_clave" => $record["consultorio_clave"] ?? ($user["consultorio_clave"] ?? ""),
-            "consultorio_nombre" => $record["consultorio_nombre"] ?? ($attention["consultorio_nombre"] ?? ($user["consultorio_nombre"] ?? "")),
+            "consultorio_clave" => $patient["paciente_consultorio_clave"] ?? ($record["consultorio_clave"] ?? ($user["consultorio_clave"] ?? "")),
+            "consultorio_nombre" => $patient["paciente_consultorio_nombre"] ?? ($record["consultorio_nombre"] ?? ($attention["consultorio_nombre"] ?? ($user["consultorio_nombre"] ?? ""))),
         ]);
 
         $pdf = new PdfTemplate();
@@ -215,20 +227,14 @@ if ($route === "pdf_colon") {
 
         $patient = null;
         if ($pacienteId > 0) {
-            $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE paciente_id = ? LIMIT 1");
-            $stmtPat->execute([$pacienteId]);
-            $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+            $patient = fetch_patient_with_assignment($pdoPdf, 'paciente_id', $pacienteId);
         } elseif (preg_match("/^[a-f0-9]{32}$/i", $ref)) {
-            $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE public_id = ? LIMIT 1");
-            $stmtPat->execute([$ref]);
-            $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+            $patient = fetch_patient_with_assignment($pdoPdf, 'public_id', $ref);
 
             if (!$patient) {
                 $attention = fetch_attention($pdoPdf, $ref);
                 if ($attention) {
-                    $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE paciente_id = ? LIMIT 1");
-                    $stmtPat->execute([(int)$attention["paciente_id"]]);
-                    $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+                    $patient = fetch_patient_with_assignment($pdoPdf, 'paciente_id', (int)$attention["paciente_id"]);
                 }
             }
         }
@@ -270,8 +276,44 @@ if ($route === "pdf_colon") {
         // Preparar payload para el PDF
         $upParam = trim((string)($_GET["up"] ?? ""));
 
-        $consParam = trim((string)($lastAtt["consultorio_clave"] ?? $lastAtt["consultorio_nombre"] ?? $user["consultorio_nombre"] ?? ""));
-        $turnoParam = trim((string)($lastAtt["turno_nombre"] ?? $lastAtt["turno_clave"] ?? ""));
+        // Prioridad: 1) Consultorio y turno fijos del paciente; 2) Sesión activa de la enfermera; 3) Última atención del paciente
+        $consParam = trim((string)(
+            $patient["paciente_consultorio_clave"]
+            ?? $patient["paciente_consultorio_nombre"]
+            ?? $user["consultorio_clave"]
+            ?? $user["consultorio_nombre"]
+            ?? $lastAtt["consultorio_clave"]
+            ?? $lastAtt["consultorio_nombre"]
+            ?? ""
+        ));
+        $turnoParam = trim((string)(
+            $patient["paciente_turno_nombre"]
+            ?? $patient["paciente_turno_clave"]
+            ?? $user["turno_nombre"]
+            ?? $user["turno_clave"]
+            ?? $lastAtt["turno_nombre"]
+            ?? $lastAtt["turno_clave"]
+            ?? ""
+        ));
+        if ($turnoParam === "") {
+            $defaultTurno = Auth::resolveDefaultTurno($pdoPdf);
+            $turnoParam = $defaultTurno["turno_nombre"];
+        }
+
+        // Registrar evento independiente en atenciones_tamizajes para reflejar la última actividad clínica del paciente
+        $activeConsultorioId = !empty($user["consultorio_id"]) ? (int)$user["consultorio_id"] : (!empty($lastAtt["consultorio_id"]) ? (int)$lastAtt["consultorio_id"] : null);
+        $activeTurnoId = !empty($user["turno_id"]) ? (int)$user["turno_id"] : (!empty($lastAtt["turno_id"]) ? (int)$lastAtt["turno_id"] : 1);
+        $stmtTam = $pdoPdf->prepare(
+            "INSERT INTO atenciones_tamizajes (paciente_id, usuario_id, consultorio_id, turno_id, tipo_tamizaje, fecha_hora)
+             VALUES (?, ?, ?, ?, ?, NOW())"
+        );
+        $stmtTam->execute([
+            (int)$patient["paciente_id"],
+            (int)$user["usuario_id"],
+            $activeConsultorioId,
+            $activeTurnoId,
+            "COLON_Y_RECTO",
+        ]);
 
         $pdfData = [
             "paciente_nombre" => $nombreCompleto,
@@ -338,17 +380,13 @@ if ($route === "pdf_salud_mental") {
         }
 
         // Soportar ref como public_id de paciente o public_id de atención
-        $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE public_id = ? LIMIT 1");
-        $stmtPat->execute([$ref]);
-        $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+        $patient = fetch_patient_with_assignment($pdoPdf, 'public_id', $ref);
 
         $attention = null;
         if (!$patient) {
             $attention = fetch_attention($pdoPdf, $ref);
             if ($attention) {
-                $stmtPat = $pdoPdf->prepare("SELECT * FROM pacientes WHERE paciente_id = ? LIMIT 1");
-                $stmtPat->execute([(int)$attention["paciente_id"]]);
-                $patient = $stmtPat->fetch(PDO::FETCH_ASSOC) ?: null;
+                $patient = fetch_patient_with_assignment($pdoPdf, 'paciente_id', (int)$attention["paciente_id"]);
             }
         }
 
@@ -439,8 +477,8 @@ if ($route === "pdf_salud_mental") {
             "matricula" => $record["enfermera_matricula"] ?? ($attention["matricula"] ?? ($user["matricula"] ?? "")),
             "unidad_clave" => $record["unidad_clave"] ?? ($attention["unidad_clave"] ?? ($user["unidad_clave"] ?? "UMF 40")),
             "unidad_nombre" => $record["unidad_nombre"] ?? ($attention["unidad_nombre"] ?? ($user["unidad_nombre"] ?? "UMF 40")),
-            "consultorio_clave" => $record["consultorio_clave"] ?? ($attention["consultorio_clave"] ?? ($user["consultorio_clave"] ?? "")),
-            "consultorio_nombre" => $record["consultorio_nombre"] ?? ($attention["consultorio_nombre"] ?? ($user["consultorio_nombre"] ?? "")),
+            "consultorio_clave" => $patient["paciente_consultorio_clave"] ?? ($record["consultorio_clave"] ?? ($attention["consultorio_clave"] ?? ($user["consultorio_clave"] ?? ""))),
+            "consultorio_nombre" => $patient["paciente_consultorio_nombre"] ?? ($record["consultorio_nombre"] ?? ($attention["consultorio_nombre"] ?? ($user["consultorio_nombre"] ?? ""))),
         ]);
 
         $pdf = new PdfTemplate();

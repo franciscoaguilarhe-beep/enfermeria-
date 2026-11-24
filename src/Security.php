@@ -34,7 +34,7 @@ final class Security
 
     public static function verifyCsrf(): void
     {
-        $token = (string)($_POST['_csrf'] ?? '');
+        $token = (string)($_POST['_csrf'] ?? $_POST['csrf_token'] ?? $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '');
         if (!hash_equals((string)($_SESSION['_csrf'] ?? ''), $token)) {
             http_response_code(419);
             exit('Solicitud inválida. Recarga la página e inténtalo de nuevo.');
