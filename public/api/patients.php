@@ -1097,8 +1097,8 @@ function evaluate_mental_health_blocks(int $puntajeAnsiedad, int $puntajeDepresi
     $clavesUp = [];
     $sitioEnvio = '';
 
-    // Bloque 1 (Preguntas 1 y 2): Suma > 3 (4, 5 o 6)
-    $positivoAnsiedad = ($puntajeAnsiedad > 3);
+    // Bloque 1 (Preguntas 1 y 2): Suma >= 3 (3, 4, 5 o 6)
+    $positivoAnsiedad = ($puntajeAnsiedad >= 3);
     if ($positivoAnsiedad) {
         $interpretaciones[] = 'PB TRASTORNO DE ANSIEDAD';
         $clavesUp[] = 'UP307';

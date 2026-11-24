@@ -1631,7 +1631,7 @@ final class PdfTemplate extends TCPDF
             ? ($ordScores[3] + $ordScores[4])
             : (int)($a['puntaje_depresion'] ?? 0);
 
-        $isPosAnsiedad = ($sumAnsiedad > 3);
+        $isPosAnsiedad = ($sumAnsiedad >= 3);
         $isPosDepresion = ($sumDepresion >= 3);
         $isPosPanico = ($q5Val === 1);
 
@@ -1938,7 +1938,7 @@ final class PdfTemplate extends TCPDF
         $resRows = [
             [
                 'preguntas' => '1 Y 2',
-                'resultado' => '>3 (' . $sumAnsiedad . ' pts)',
+                'resultado' => '3 O MAS (' . $sumAnsiedad . ' pts)',
                 'interpretacion' => 'PB TRASTORNO DE ANSIEDAD',
                 'up' => 'UP307',
                 'envio' => 'ENVIO MF',

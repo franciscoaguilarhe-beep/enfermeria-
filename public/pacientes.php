@@ -1083,7 +1083,7 @@ function tri_select_options(): string {
                         <tbody>
                             <tr data-mh-result-row="ansiedad">
                                 <td class="mh-col-center"><strong>1 Y 2</strong></td>
-                                <td class="mh-col-center">&gt;3 <span class="mh-current-score" data-mh-score-p12>(Actual: 0 pts)</span></td>
+                                <td class="mh-col-center">3 O MAS <span class="mh-current-score" data-mh-score-p12>(Actual: 0 pts)</span></td>
                                 <td><strong>PB TRASTORNO DE ANSIEDAD</strong></td>
                                 <td class="mh-col-center"><span class="mh-up-tag">UP307</span></td>
                                 <td class="mh-col-center"><strong>ENVIO MF</strong></td>

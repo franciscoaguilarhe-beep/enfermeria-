@@ -1774,7 +1774,7 @@
   }
 
   function evaluateMhBlocks(sumAnsiedad, sumDepresion, panicoVal) {
-    const isPosAnsiedad = sumAnsiedad > 3;
+    const isPosAnsiedad = sumAnsiedad >= 3;
     const isPosDepresion = sumDepresion >= 3;
     const isPosPanico = panicoVal === 1;
 
